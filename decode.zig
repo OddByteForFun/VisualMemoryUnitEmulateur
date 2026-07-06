@@ -288,10 +288,10 @@ pub fn step(cpu: *Cpu) u8 {
         },
         .addc_imm, .addc_d9, .addc_ri => {
             const v = readOp8(cpu, dec);
-            const carry: u16 = @intFromBool(cpu.psw.cy);
-            const result: u16 = @as(u16, cpu.a) + @as(u16, v) + carry;
+            const old_cy: u4 = @intFromBool(cpu.psw.cy);
+            const result: u16 = @as(u16, cpu.a) + @as(u16, v) + old_cy;
             cpu.psw.cy = result > 0xFF;
-            cpu.psw.ac = (cpu.a & 0xF) + (v & 0xF) + @as(u4, @intFromBool(cpu.psw.cy)) > 0xF;
+            cpu.psw.ac = (cpu.a & 0xF) + (v & 0xF) + old_cy > 0xF;
             cpu.psw.ov = (@as(u1, @truncate(cpu.a >> 7)) == @as(u1, @truncate(v >> 7))) and
                 (@as(u1, @truncate(cpu.a >> 7)) != @as(u1, @truncate(result >> 7)));
             cpu.a = @truncate(result);
@@ -312,14 +312,14 @@ pub fn step(cpu: *Cpu) u8 {
         },
         .subc_imm, .subc_d9, .subc_ri => {
             const v = readOp8(cpu, dec);
-            const carry: i16 = @intFromBool(cpu.psw.cy);
-            const result: i16 = @as(i16, cpu.a) - @as(i16, v) - carry;
+            const old_cy: i16 = @intFromBool(cpu.psw.cy);
+            const result: i16 = @as(i16, cpu.a) - @as(i16, v) - old_cy;
             const r_u8: u8 = @truncate(@as(u16, @bitCast(result)));
             const sa: u1 = @truncate(cpu.a >> 7);
             const sv: u1 = @truncate(v >> 7);
             const sr: u1 = @truncate(r_u8 >> 7);
             cpu.psw.cy = result < 0;
-            cpu.psw.ac = (cpu.a & 0xF) < (v & 0xF) + @as(u4, @intFromBool(cpu.psw.cy));
+            cpu.psw.ac = (cpu.a & 0xF) < (v & 0xF) + @as(u4, @truncate(@as(u8, @intCast(old_cy))));
             cpu.psw.ov = (sa != sv) and (sa != sr);
             cpu.a = r_u8;
             cpu.psw.p = @popCount(cpu.a) % 2 == 1;
@@ -532,9 +532,8 @@ pub fn step(cpu: *Cpu) u8 {
             cpu.a = cpu.inst_bank.data[trr +% cpu.a];
         },
         .jmp_a12 => {
-            // a12 = nibble faible de l'opcode + imm8
-            const imm8 = cpu.fetch8(cpu.pc);
-            const ad12 = @as(u16, dec.opcode >> 4) << 8 | @as(u16, imm8);
+            const imm8 = cpu.fetch8();
+            const ad12 = (@as(u16, dec.opcode & 0x0F) << 8) | @as(u16, imm8);
             cpu.pc = (cpu.pc & 0xF000) | ad12;
         },
         .reti => {
@@ -562,11 +561,13 @@ pub fn step(cpu: *Cpu) u8 {
             // (PC) ← (PC) + 3, if (d9, b3) = 1 then (PC) ← (PC) + r8, (d9, b3) = 0
             const addr = readEA(cpu, dec);
             const r8 = cpu.fetch8();
-            const bit = @as(u3, @intcast(dec.bit.?));
-            const val = load8(cpu, addr);
-            if ((val >> bit) & 1 != 0) cpu.pc +%= signExt8(r8);
+            const bit = @as(u3, @intCast(dec.bit.?));
+            const val = cpu.load8(addr);
+            if ((val >> bit) & 1 != 0) {
+                cpu.pc +%= signExt8(r8);
+                cpu.store8(addr, val & ~(@as(u8, 1) << bit));
+            }
         },
-        else => {},
     }
     return cycles(dec);
 }
@@ -583,9 +584,13 @@ fn readIndirectAddr(cpu: *Cpu, ri: u2) u9 {
     return bit8 | reg_val;
 }
 
+fn decodeD9addr(dec: DecodeResult, cpu: *Cpu) u9 {
+    return @as(u9, @truncate(decodeD9(dec.opcode, cpu.fetch8())));
+}
+
 fn readEA(cpu: *Cpu, dec: DecodeResult) u9 {
     return switch (dec.mode) {
-        .d9 => @as(u9, @truncate(decodeD9(dec.opcode, cpu.fetch8()))),
+        .d9 => decodeD9addr(dec, cpu),
         .ri => readIndirectAddr(cpu, @as(u2, @intCast(dec.ri.?))),
         else => unreachable,
     };
@@ -594,7 +599,7 @@ fn readEA(cpu: *Cpu, dec: DecodeResult) u9 {
 fn readOp8(cpu: *Cpu, dec: DecodeResult) u8 {
     return switch (dec.mode) {
         .imm => cpu.fetch8(),
-        .d9 => cpu.load8(@as(u9, @truncate(decodeD9(dec.opcode, cpu.fetch8())))),
+        .d9 => cpu.load8(decodeD9addr(dec, cpu)),
         .ri => cpu.load8(readIndirectAddr(cpu, @as(u2, @intCast(dec.ri.?)))),
         else => unreachable,
     };

@@ -38,6 +38,8 @@ pub const Cpu = struct {
     c: u8 = 0,
     sp: u8 = 0,
     pc: u16 = 0,
+    trl: u8 = 0,
+    trh: u8 = 0,
     psw: Psw = .{},
     halted: bool = false,
 

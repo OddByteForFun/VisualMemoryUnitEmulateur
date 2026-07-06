@@ -4,3 +4,6 @@ zig-out/
 .DS_Store
 todo.md
 data.md
+timer.md
+cpu.md
+timer_impl.md
