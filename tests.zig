@@ -160,13 +160,13 @@ test "VMC-159 ADDC d9 example 1" {
     // MOV #068H,023H: 0x22 0x23 0x68
     // ADD #00CH: 0x81 0x0C
     // ADDC 023H: 0x92 0x23
-    // SET1 PSW,7: 0xEF 0x01  (0xEF = row E col F → set1, bit=7, d9 addr = (1)<<8 | 0x01 = 0x101 = PSW)
+    // SET1 PSW,7: 0xFF 0x01  (0xFF = row F col F → set1 d8=1, bit=7, d9 addr = 0x101 = PSW)
     // ADDC 023H: 0x92 0x23
     rom[0] = 0x23; rom[1] = 0x00; rom[2] = 0x55;
     rom[3] = 0x22; rom[4] = 0x23; rom[5] = 0x68;
     rom[6] = 0x81; rom[7] = 0x0C;
     rom[8] = 0x92; rom[9] = 0x23;
-    rom[10] = 0xEF; rom[11] = 0x01; // SET1 PSW,7 → CY=1
+    rom[10] = 0xFF; rom[11] = 0x01; // SET1 PSW,7 → CY=1
     rom[12] = 0x92; rom[13] = 0x23;
     _ = step(&cpu); // MOV #055H,ACC
     _ = step(&cpu); // MOV #068H,023H
@@ -891,6 +891,23 @@ test "VMC-210 BNE imm not taken" {
     _ = step(&cpu); // BNE: ACC(03H) == #03H → no branch
     try testing.expect(!cpu.psw.cy);
     try testing.expectEqual(@as(u16, 0xF20), cpu.pc);
+}
+
+test "CLR1 d9 bit0 — ACC (SFR) et RAM" {
+    var rom: [65536]u8 = undefined;
+    var cpu = makeCpu(&rom);
+    rom[0] = 0x23; rom[1] = 0x00; rom[2] = 0x01;
+    rom[3] = 0xD8; rom[4] = 0x00;
+    rom[5] = 0x22; rom[6] = 0x7F; rom[7] = 0x01;
+    rom[8] = 0xC8; rom[9] = 0x7F;
+    _ = step(&cpu);
+    try testing.expectEqual(@as(u8, 0x01), cpu.a);
+    _ = step(&cpu);
+    try testing.expectEqual(@as(u8, 0x00), cpu.a);
+    _ = step(&cpu);
+    try testing.expectEqual(@as(u8, 0x01), cpu.ram_bank0[0x7F]);
+    _ = step(&cpu);
+    try testing.expectEqual(@as(u8, 0x00), cpu.ram_bank0[0x7F]);
 }
 
 test "VMC-213 CALL a12 example 1" {

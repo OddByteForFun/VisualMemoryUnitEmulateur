@@ -606,5 +606,9 @@ fn readOp8(cpu: *Cpu, dec: DecodeResult) u8 {
 }
 
 pub fn decodeD9(opcode: u8, val: u8) u16 {
-    return @as(u16, opcode & 1) << 8 | val;
+    const d8: u16 = if (opcode & 0x08 != 0)
+        @as(u16, opcode >> 4) & 1
+    else
+        @as(u16, opcode) & 1;
+    return d8 << 8 | val;
 }

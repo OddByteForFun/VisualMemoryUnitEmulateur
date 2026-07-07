@@ -200,7 +200,7 @@ Le LC86k possède 70 instructions (p561) :
 | ldc | 0xC1 | 🟢 | À faire |
 | xch_d9 | 0xC2–0xC3 | 🟢 | VMC-194 |
 | xch_ri | 0xC4–0xC7 | 🟢 | VMC-195 |
-| clr1 | 0xC8–0xCF, 0xD8–0xDF | 🟢 | À faire |
+| clr1 | 0xC8–0xCF, 0xD8–0xDF | 🟢 | VMC-218 |
 | rorc | 0xD0 | 🟢 | VMC-184 |
 | or_imm | 0xD1 | 🟢 | VMC-175 |
 | or_d9 | 0xD2–0xD3 | 🟢 | VMC-176 |
@@ -220,10 +220,10 @@ Le LC86k possède 70 instructions (p561) :
 | Status | Nb instructions |
 |--------|:--------------:|
 | 🟢 implémenté | 68 |
-| 🟢 VMC testé | 52 |
-| 🔴 À faire | 16 |
+| 🟢 VMC testé | 53 |
+| 🔴 À faire | 15 |
 
-**Tests :** 52/52 passent ✅ (`zig build test`).  
+**Tests :** 53/53 passent ✅ (`zig build test`).  
 Les tests sont les exemples VMC-XXX du **Sanyo LC86K Series Programming Manual** (`doc/VMU.txt`, section VMC-151 à VMC-224). Chaque test référence le numéro d'exemple (e.g. VMC-159, VMC-167) comme spécification de référence.
 
 ## TODO
