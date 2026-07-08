@@ -569,7 +569,9 @@ pub fn step(cpu: *Cpu) u8 {
             }
         },
     }
-    return cycles(dec);
+    const used = cycles(dec);
+    cpu.tickTimers(used);
+    return used;
 }
 
 fn signExt8(val: u8) u16 {

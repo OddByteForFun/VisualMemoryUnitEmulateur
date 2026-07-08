@@ -32,7 +32,7 @@ pub const Cpu = struct {
     // Flash storage (128KB)
     flash: [131072]u8, // 2 banks × 64KB, filesystem FAT
 
-    // Registres CPU (convenience, synced avec sfr_raw)
+    // Registres CPU
     a: u8 = 0,
     b: u8 = 0,
     c: u8 = 0,
@@ -42,6 +42,15 @@ pub const Cpu = struct {
     trh: u8 = 0,
     psw: Psw = .{},
     halted: bool = false,
+
+    // Timer 0
+    t0l_counter: u8 = 0,
+    t0h_counter: u8 = 0,
+    t0_prescaler_acc: u16 = 0,
+
+    // base timer
+    base_timer_acc: u32 = 0,
+    base_timer_counter: u16 = 0,
 
     pub fn init(rom: []u8) Cpu {
         return Cpu{
@@ -78,6 +87,11 @@ pub const Cpu = struct {
         @memset(&self.xram_banks.bank2, 0);
         @memset(&self.work_ram, 0);
         @memset(&self.flash, 0);
+        self.t0l_counter = 0;
+        self.t0h_counter = 0;
+        self.t0_prescaler_acc = 0;
+        self.base_timer_acc = 0;
+        self.base_timer_counter = 0;
     }
 
     pub fn currentRamBank(self: *Cpu) *[256]u8 {
@@ -106,6 +120,60 @@ pub const Cpu = struct {
         }
     }
 
+    // Timer 0
+
+    fn t0IsMode2(self: *Cpu) bool {
+        const t0cnt = self.sfr_raw[SFR_T0CNT];
+        return (t0cnt & T0CNT_T0LONG != 0) and (t0cnt & T0CNT_T0LEXT == 0);
+    }
+
+    pub fn tickTimer0(self: *Cpu, cycles_used: u8) void {
+        const t0cnt = self.sfr_raw[SFR_T0CNT];
+        if (!self.t0IsMode2()) return;
+        const running = (t0cnt & T0CNT_T0HRUN != 0) and (t0cnt & T0CNT_T0LRUN != 0);
+        if (!running) return;
+
+        const prescaler_period: u16 = 256 - @as(u16, self.sfr_raw[SFR_T0PRR]);
+
+        self.t0_prescaler_acc += cycles_used;
+        while (self.t0_prescaler_acc >= prescaler_period) {
+            self.t0_prescaler_acc -= prescaler_period;
+            self.incrementT0Mode2();
+        }
+    }
+
+    fn incrementT0Mode2(self: *Cpu) void {
+        const old_l = self.t0l_counter;
+        self.t0l_counter +%= 1;
+
+        if (old_l == 0xFF) {
+            self.t0h_counter +%= 1;
+        }
+
+        if (old_l == 0xFF and self.t0h_counter == 0x00) {
+            self.sfr_raw[SFR_T0CNT] |= T0CNT_T0HOVF | T0CNT_T0LOVF;
+            self.t0l_counter = self.sfr_raw[SFR_T0LR];
+            self.t0h_counter = self.sfr_raw[SFR_T0HR];
+        }
+    }
+
+    pub fn tickBaseTimer(self: *Cpu, cycles_used: u8) void {
+        self.base_timer_acc += cycles_used;
+        if (self.base_timer_acc >= BASE_TIMER_HALF_SECOND_CYCLES) {
+            self.base_timer_acc -= BASE_TIMER_HALF_SECOND_CYCLES;
+            self.sfr_raw[SFR_BTCR] |= BTCR_BT0_FLAG;
+        }
+    }
+
+    pub fn tickTimers(self: *Cpu, cycles_used: u8) void {
+        self.tickTimer0(cycles_used);
+        self.tickBaseTimer(cycles_used);
+    }
+
+    pub fn servicePendingInterrupt(self: *Cpu) void {
+        _ = self;
+    }
+
     // il s'agit de définir les offsets utilisés par load8 qui ajoute 0x100 à ces valeurs.
 
     const SFR_ACC: u7 = 0x00;
@@ -118,6 +186,32 @@ pub const Cpu = struct {
     const SFR_IE: u7 = 0x08;
     const SFR_IP: u7 = 0x09;
 
+    // Timer 0
+    const SFR_T0PRR: u7 = 0x11; //  valeur du prescaler Timer 0
+    const SFR_T0L: u7 = 0x12; // Lecture du compteur courant
+    const SFR_T0LR: u7 = 0x13; // Lecture écriture du reload
+    const SFR_T0H: u7 = 0x14; // compteur high courant
+    const SFR_T0HR: u7 = 0x15; //  reload high
+    const SFR_T0CNT: u7 = 0x4E; //  contrôle, flags et enables
+    const SFR_I23CR: u7 = 0x5E; // sélection front externe INT2/INT3
+    const SFR_ISL: u7 = 0x5F; //  sélection entrée externe et horloge
+
+    // Octet qui compose T0CNT
+    const T0CNT_T0HRUN: u8 = 0x80;
+    const T0CNT_T0LRUN: u8 = 0x40;
+    const T0CNT_T0LONG: u8 = 0x20;
+    const T0CNT_T0LEXT: u8 = 0x10;
+    const T0CNT_T0HOVF: u8 = 0x08;
+    const T0CNT_T0HIE: u8 = 0x04;
+    const T0CNT_T0LOVF: u8 = 0x02;
+    const T0CNT_T0LIE: u8 = 0x01;
+
+    // Base Timer
+    const SFR_BTCR: u7 = 0x7F;
+    const BTCR_BT0_FLAG: u8 = 0x02;
+
+    const BASE_TIMER_HALF_SECOND_CYCLES: u32 = 3_000_000;
+
     pub fn loadSFR(self: *Cpu, offset: u7) u8 {
         return switch (offset) {
             SFR_ACC => self.a,
@@ -127,6 +221,8 @@ pub const Cpu = struct {
             SFR_TRH => self.trh,
             SFR_PSW => @as(u8, @bitCast(self.psw)),
             SFR_SP => self.sp,
+            SFR_T0L => self.t0l_counter,
+            SFR_T0H => self.t0h_counter,
             else => self.sfr_raw[offset],
         };
     }
@@ -141,6 +237,29 @@ pub const Cpu = struct {
             SFR_TRH => self.trh = val,
             SFR_PSW => self.psw = @bitCast(val),
             SFR_SP => self.sp = val,
+            SFR_T0LR => {
+                // si le timer n'est pas en cours d'éxécution, on recharge le compteur low avec la valeur écrite dans T0LR.
+                //Sinon, on ne fait rien.
+                if (self.sfr_raw[SFR_T0CNT] & T0CNT_T0LRUN == 0) {
+                    self.t0l_counter = val;
+                }
+            },
+            SFR_T0HR => {
+                // si le timer n'est pas en cours d'éxécution, on recharge le compteur high avec la valeur écrite dans T0HR.
+                //Sinon, on ne fait rien.
+                if (self.sfr_raw[SFR_T0CNT] & T0CNT_T0HRUN == 0) {
+                    self.t0h_counter = val;
+                }
+            },
+            SFR_T0CNT => {
+                if (val & T0CNT_T0LRUN == 0) {
+                    self.t0l_counter = self.sfr_raw[SFR_T0LR];
+                }
+                if (val & T0CNT_T0HRUN == 0) {
+                    self.t0h_counter = self.sfr_raw[SFR_T0HR];
+                }
+            },
+
             else => {},
         }
     }
