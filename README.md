@@ -20,19 +20,19 @@
 ## Documentation  
 Les références seront effectuées d'après le fichier VMU.pdf  
 
-## Instructions
+### Instructions
 
-👉 Voir [doc/doc_inst.md](doc/inst.md) — tableau complet des 70 instructions, état d'avancement par opcode, résumé des tests VMC.
+Source : [doc/doc_inst.md](doc/inst.md) 
+Tableau complet des 70 instructions, état d'avancement par opcode, résumé des tests VMC.  
+68/70 instructions implémentées 🟢, 53 avec test VMC, 15 tests à ajouter.  
 
-**Résumé :** 68/70 instructions implémentées 🟢, 53 avec test VMC, 15 tests à ajouter.
+### Timers
 
-## Timers
+Source : [doc/doc_timer.md](doc/timer.md)
 
-👉 Voir [doc/doc_timer.md](doc/timer.md) — statut détaillé de l'implémentation timer.
+- [x] Timer 0 Mode 2 (16-bit reload, prescaler, overflow, reload au stop), Base Timer (flag BT0 ~0.5s), tick câblé dans `decode.step()`.
 
-**Implémenté :** Timer 0 Mode 2 (16-bit reload, prescaler, overflow, reload au stop), Base Timer (flag BT0 ~0.5s), tick câblé dans `decode.step()`.
-
-**En attente :** Interruptions timer (stub `servicePendingInterrupt` prêt), Timer 0 Mode 0, HALT + réveil.
+- [ ] Interruptions timer (stub `servicePendingInterrupt` prêt), Timer 0 Mode 0, HALT + réveil.
 
 ## TODO
 

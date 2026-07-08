@@ -29,8 +29,8 @@ Mode actif quand `T0LONG=1`, `T0LEXT=0`.
 ### Boucle d'exécution
 
 `tickTimers(cycles_used)` est appelé à la fin de `decode.step()`. Il délègue à :
-1. `tickTimer0(cycles_used)`
-2. `tickBaseTimer(cycles_used)`
+- `tickTimer0(cycles_used)`
+- `tickBaseTimer(cycles_used)`
 
 ### Fonctions ajoutées dans `Cpu`
 
@@ -43,30 +43,21 @@ Mode actif quand `T0LONG=1`, `T0LEXT=0`.
 | `tickTimers(cycles)` | Appelle tickTimer0 + tickBaseTimer |
 | `servicePendingInterrupt()` | Stub vide (prêt à remplir) |
 
-## Non implémenté
+## Todo
 
 ### Interruptions timer
 
-Une fonction stub `servicePendingInterrupt()` existe (vide). Le code complet est prêt dans `timer_impl.md` (lignes 1230-1281) avec :
-- Énumération `Interrupt` (int2_t0l, int3_base_timer, t0h, t1)
-- Détection `pendingInterrupt()` (flag + enable local + IE + EA + interrupt_depth)
-- Push PC + saut au vecteur (0x0013, 0x001B, 0x0023, 0x002B)
-- `interrupt_depth` pour bloquer le nesting
-- `interrupts_blocked` après écriture dans IE/IP
-- `RETI` doit resetter `interrupt_depth = 0`
+- [ ] Énumération `Interrupt` (int2_t0l, int3_base_timer, t0h, t1)
+- [ ] Détection `pendingInterrupt()` (flag + enable local + IE + EA + interrupt_depth)
+- [ ] Push PC + saut au vecteur (0x0013, 0x001B, 0x0023, 0x002B)
+- [ ] `interrupt_depth` pour bloquer le nesting
+- [ ] `interrupts_blocked` après écriture dans IE/IP
+- [ ] `RETI` doit resetter `interrupt_depth = 0`
 
 ### Timer 0 Mode 0 (deux timers 8-bit indépendants)
 
-Mode actif quand `T0LONG=0`, `T0LEXT=0`. Chaque compteur (T0L, T0H) peut overflow indépendamment avec son propre flag et reload.
+- [ ] Mode actif quand `T0LONG=0`, `T0LEXT=0`. Chaque compteur (T0L, T0H) peut overflow indépendamment avec son propre flag et reload.
 
 ### HALT + réveil par interruption
 
-Quand `cpu.halted = true`, le CPU ne doit pas fetch d'instruction mais continuer à avancer les timers. Si une interruption devient pending, `cpu.halted = false` et l'IRQ est servie. Le Base Timer est souvent ce qui réveille le CPU.
-
-## Prochaine étape recommandée
-
-1. Implémenter `servicePendingInterrupt()` (code déjà rédigé dans `timer_impl.md`)
-2. Câbler l'appel après `tickTimers()` dans la boucle principale
-3. Ajouter les constantes IE manquantes (IE_EA, IE_ET2_T0L, IE_ET3_BT, IE_ET0H)
-4. Timer 0 Mode 0
-5. HALT + réveil
+- [ ] Quand `cpu.halted = true`, le CPU ne doit pas fetch d'instruction mais continuer à avancer les timers. Si une interruption devient pending, `cpu.halted = false` et l'IRQ est servie. Le Base Timer est souvent ce qui réveille le CPU.
