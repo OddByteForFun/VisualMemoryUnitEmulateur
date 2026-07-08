@@ -52,6 +52,10 @@ pub const Cpu = struct {
     base_timer_acc: u32 = 0,
     base_timer_counter: u16 = 0,
 
+    // interruptions
+    interrupt_depth: u8 = 0, // verifier sur une IRQ est possible (0, ok, 1 attente RETI)
+    interrupt_blocked: u8 = 0,
+
     pub fn init(rom: []u8) Cpu {
         return Cpu{
             .inst_bank = .{
@@ -160,9 +164,10 @@ pub const Cpu = struct {
             self.t0_prescaler_acc -= prescaler_period;
             switch (mode) {
                 0 => self.incrementT0Mode0(),
-                1 => {}, // mode 1 (externe) pas encore
+                1 => {},
                 2 => self.incrementT0Mode2(),
-                3 => {}, // mode 3 (externe) pas encore
+                3 => {},
+                else => {},
             }
         }
     }
@@ -217,8 +222,55 @@ pub const Cpu = struct {
         self.tickBaseTimer(cycles_used);
     }
 
+    // gestion des interuptions.
+    // verification de certains flags posés par les timers
+    // complété par de nombreux flags
+    // Premières implémentations (INT2/TOL, INT3, T0H) basées sur les timers
+    // p314
+
+    pub const Interruptions = enum(u8) {
+        int2, // t0l
+        int3, // base timer
+        t0h, // t0h
+    };
+
     pub fn servicePendingInterrupt(self: *Cpu) void {
-        _ = self;
+        var val: ?Interruptions = null;
+
+        if (self.interrupt_depth != 0) return;
+
+        if (self.interrupt_blocked > 0) {
+            self.interrupt_blocked -%= 1;
+            return;
+        }
+
+        const ie = self.sfr_raw[SFR_IE];
+        const t0cnt = self.sfr_raw[SFR_T0CNT];
+        const btcr = self.sfr_raw[SFR_BTCR];
+
+        if (ie & 0x80 == 0) return; // pas d'interruptions autorisées (EA)
+
+        if (t0cnt & T0CNT_T0LOVF != 0 and t0cnt & T0CNT_T0LIE != 0 and ie & IP_int2 != 0) {
+            val = .int2;
+        } else if (btcr & BTCR_BT0_FLAG != 0 and btcr & BTCR_BT0_IE != 0 and ie & IP_int3 != 0) {
+            val = .int3;
+        } else if (t0cnt & T0CNT_T0HOVF != 0 and t0cnt & T0CNT_T0HIE != 0 and ie & IP_t0h != 0) {
+            val = .t0h;
+        }
+
+        const vecteur: u16 = if (val) |irq| switch (irq) {
+            .int2 => 0x0013,
+            .int3 => 0x001B,
+            .t0h => 0x0023,
+        } else return;
+
+        const return_addr = self.pc;
+        self.sp +%= 1;
+        self.ram_bank0[self.sp] = @truncate(return_addr & 0xFF);
+        self.sp +%= 1;
+        self.ram_bank0[self.sp] = @truncate(return_addr >> 8);
+        self.pc = vecteur;
+        self.interrupt_depth = 1;
     }
 
     // il s'agit de définir les offsets utilisés par load8 qui ajoute 0x100 à ces valeurs.
@@ -230,7 +282,7 @@ pub const Cpu = struct {
     const SFR_TRL: u7 = 0x04;
     const SFR_TRH: u7 = 0x05;
     const SFR_SP: u7 = 0x06;
-    const SFR_IE: u7 = 0x08;
+    const SFR_IE: u7 = 0x08; // autorisation d'interruption
     const SFR_IP: u7 = 0x09;
 
     // Timer 0 mode 2
@@ -248,16 +300,27 @@ pub const Cpu = struct {
     const T0CNT_T0LRUN: u8 = 0x40;
     const T0CNT_T0LONG: u8 = 0x20;
     const T0CNT_T0LEXT: u8 = 0x10;
-    const T0CNT_T0HOVF: u8 = 0x08;
-    const T0CNT_T0HIE: u8 = 0x04;
-    const T0CNT_T0LOVF: u8 = 0x02;
-    const T0CNT_T0LIE: u8 = 0x01;
+    const T0CNT_T0HOVF: u8 = 0x08; // utilisé pour les interruptions mode 0
+    const T0CNT_T0HIE: u8 = 0x04; // T0H interrupt request enabled
+    const T0CNT_T0LOVF: u8 = 0x02; // utilisé pour les interruptions mode 0
+    const T0CNT_T0LIE: u8 = 0x01; // T0L interrupt request enabled
 
     // Base Timer
-    const SFR_BTCR: u7 = 0x7F;
+    const SFR_BTCR: u7 = 0x7F; // gestion notamment des interruptions du base timer
     const BTCR_BT0_FLAG: u8 = 0x02;
-
     const BASE_TIMER_HALF_SECOND_CYCLES: u32 = 3_000_000;
+
+    // Priorisation des interruptions (bits du registre IE)
+
+    const IP_int2: u8 = 0x04; // IE bit 2 = ET2 (INT2_T0L)
+    const IP_int3: u8 = 0x08; // IE bit 3 = ET3 (INT3_BT)
+    const IP_t0h: u8 = 0x10; // IE bit 4 = ET0H (T0H)
+    const IP_T1: u8 = 0x20; // IE bit 5 = ET1 (Timer 1)
+    const IP_SIO0: u8 = 0x40; // IE bit 6
+    const IP_SIO1: u8 = 0x80; // IE bit 7
+
+    // Bits du registre BTCR (Base Timer)
+    const BTCR_BT0_IE: u8 = 0x01;
 
     pub fn loadSFR(self: *Cpu, offset: u7) u8 {
         return switch (offset) {
@@ -284,6 +347,9 @@ pub const Cpu = struct {
             SFR_TRH => self.trh = val,
             SFR_PSW => self.psw = @bitCast(val),
             SFR_SP => self.sp = val,
+            SFR_IE, SFR_IP => {
+                self.interrupt_blocked = 1;
+            },
             SFR_T0LR => {
                 // si le timer n'est pas en cours d'éxécution, on recharge le compteur low avec la valeur écrite dans T0LR.
                 //Sinon, on ne fait rien.

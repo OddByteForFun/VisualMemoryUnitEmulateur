@@ -537,13 +537,12 @@ pub fn step(cpu: *Cpu) u8 {
             cpu.pc = (cpu.pc & 0xF000) | ad12;
         },
         .reti => {
-            // p624
-            // (PC15 to 8) ← ((SP)), (SP) ← (SP) - 1, (PC7 to 0) ← ((SP)), (SP) ← (SP) - 1
             const hi = cpu.ram_bank0[cpu.sp];
             cpu.sp -%= 1;
             const lo = cpu.ram_bank0[cpu.sp];
             cpu.sp -%= 1;
             cpu.pc = (@as(u16, hi) << 8) | @as(u16, lo);
+            cpu.interrupt_depth = 0;
         },
         .dbnz_d9, .dbnz_ri => {
             //(PC) ← (PC) + 3, (d9) = (d9)-1, if (d9) ≠ 0 then (PC) ← (PC) + r8
@@ -571,6 +570,7 @@ pub fn step(cpu: *Cpu) u8 {
     }
     const used = cycles(dec);
     cpu.tickTimers(used);
+    cpu.servicePendingInterrupt();
     return used;
 }
 
