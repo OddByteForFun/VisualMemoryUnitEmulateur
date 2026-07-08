@@ -120,25 +120,50 @@ pub const Cpu = struct {
         }
     }
 
-    // Timer 0
+    /// ref : tableau 2.19 p 229
+    // timer 0 mode 0
+
+    fn t0IsMode0(self: *Cpu) bool {
+        const t0cnt = self.sfr_raw[SFR_T0CNT];
+        return (t0cnt & T0CNT_T0LONG == 0) and (t0cnt & T0CNT_T0LEXT == 0);
+    }
+
+    // Timer 0 mode 1
+
+    fn t0IsMode1(self: *Cpu) bool {
+        const t0cnt = self.sfr_raw[SFR_T0CNT];
+        return (t0cnt & T0CNT_T0LONG == 0) and (t0cnt & T0CNT_T0LEXT != 0);
+    }
+
+    // Timer 0 mode 2
 
     fn t0IsMode2(self: *Cpu) bool {
         const t0cnt = self.sfr_raw[SFR_T0CNT];
         return (t0cnt & T0CNT_T0LONG != 0) and (t0cnt & T0CNT_T0LEXT == 0);
     }
 
+    // timer 0 mode 3
+
+    fn t0IsMode3(self: *Cpu) bool {
+        const t0cnt = self.sfr_raw[SFR_T0CNT];
+        return (t0cnt & T0CNT_T0LONG != 0) and (t0cnt & T0CNT_T0LEXT != 0);
+    }
+
     pub fn tickTimer0(self: *Cpu, cycles_used: u8) void {
         const t0cnt = self.sfr_raw[SFR_T0CNT];
-        if (!self.t0IsMode2()) return;
-        const running = (t0cnt & T0CNT_T0HRUN != 0) and (t0cnt & T0CNT_T0LRUN != 0);
-        if (!running) return;
+        const mode = (t0cnt >> 4) & 0x03; //nibble haut avec bit 6 et 7
+        // commun à tous les modes
 
         const prescaler_period: u16 = 256 - @as(u16, self.sfr_raw[SFR_T0PRR]);
-
         self.t0_prescaler_acc += cycles_used;
         while (self.t0_prescaler_acc >= prescaler_period) {
             self.t0_prescaler_acc -= prescaler_period;
-            self.incrementT0Mode2();
+            switch (mode) {
+                0 => self.incrementT0Mode0(),
+                1 => {}, // mode 1 (externe) pas encore
+                2 => self.incrementT0Mode2(),
+                3 => {}, // mode 3 (externe) pas encore
+            }
         }
     }
 
@@ -154,6 +179,28 @@ pub const Cpu = struct {
             self.sfr_raw[SFR_T0CNT] |= T0CNT_T0HOVF | T0CNT_T0LOVF;
             self.t0l_counter = self.sfr_raw[SFR_T0LR];
             self.t0h_counter = self.sfr_raw[SFR_T0HR];
+        }
+    }
+
+    fn incrementT0Mode0(self: *Cpu) void {
+        const t0cnt = self.sfr_raw[SFR_T0CNT];
+
+        if (t0cnt & T0CNT_T0LRUN != 0) {
+            const old = self.t0l_counter;
+            self.t0l_counter +%= 1;
+            if (old == 0xFF) {
+                self.t0l_counter = self.sfr_raw[SFR_T0LR];
+                self.sfr_raw[SFR_T0CNT] |= T0CNT_T0LOVF;
+            }
+        }
+
+        if (t0cnt & T0CNT_T0HRUN != 0) {
+            const old = self.t0h_counter;
+            self.t0h_counter +%= 1;
+            if (old == 0xFF) {
+                self.t0h_counter = self.sfr_raw[SFR_T0HR];
+                self.sfr_raw[SFR_T0CNT] |= T0CNT_T0HOVF;
+            }
         }
     }
 
@@ -186,7 +233,7 @@ pub const Cpu = struct {
     const SFR_IE: u7 = 0x08;
     const SFR_IP: u7 = 0x09;
 
-    // Timer 0
+    // Timer 0 mode 2
     const SFR_T0PRR: u7 = 0x11; //  valeur du prescaler Timer 0
     const SFR_T0L: u7 = 0x12; // Lecture du compteur courant
     const SFR_T0LR: u7 = 0x13; // Lecture écriture du reload
