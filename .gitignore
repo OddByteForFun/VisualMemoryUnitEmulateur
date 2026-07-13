@@ -7,3 +7,6 @@ data.md
 timer.md
 cpu.md
 timer_impl.md
+roms/
+zig-pkg/
+vmu_trace.log

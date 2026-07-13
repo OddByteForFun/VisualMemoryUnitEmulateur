@@ -1,5 +1,6 @@
 const std = @import("std");
 const Cpu = @import("lc86K").Cpu;
+const dbg = @import("debug");
 
 // https://mc.pp.se/dc/vms/cpu.html
 
@@ -129,7 +130,7 @@ fn decodeOpcode(opcode: u8) DecodeResult {
             0x8...0xF => .{ .inst = .bpc, .opcode = opcode, .mode = .d9, .bit = opcode & 0x7 },
         },
         0x5 => switch (col) {
-            0x0...0x1 => unreachable,
+            0x0...0x1 => .{ .inst = .nop, .opcode = opcode },
             0x2...0x3 => .{ .inst = .dbnz_d9, .opcode = opcode, .mode = .d9 },
             0x4...0x7 => .{ .inst = .dbnz_ri, .opcode = opcode, .mode = .ri, .ri = col & 0x3 },
             0x8...0xF => .{ .inst = .bpc, .opcode = opcode, .mode = .d9, .bit = opcode & 0x7 },
@@ -258,10 +259,28 @@ pub fn step(cpu: *Cpu) u8 {
     if (cpu.halted) {
         cpu.tickTimers(1);
         cpu.servicePendingInterrupt();
+        if (dbg.halt_sample == 0) {
+            dbg.log("HALT PC={X:0>4} IE={X:0>2} BTCR={X:0>2} T0CNT={X:0>2} T1CNT={X:0>2} P3INT={X:0>2} BTcnt={d} BTacc={d}", .{ cpu.pc, cpu.sfr_raw[0x08], cpu.sfr_raw[0x7F], cpu.sfr_raw[0x10], cpu.sfr_raw[0x18], cpu.sfr_raw[0x4E], cpu.base_timer_counter, cpu.base_timer_acc });
+        }
+        dbg.halt_sample +%= 1;
+        if (dbg.halt_sample >= 10000) dbg.halt_sample = 0;
         return 1;
     }
+
+    dbg.recordPC(cpu.pc);
+
+    const pc_before = cpu.pc;
     const opcode = cpu.fetch8();
     const dec = decodeOpcode(opcode);
+
+    if (dbg.log_level == .trace) {
+        var buf: [64]u8 = undefined;
+        const len = dbg.disassembleAt(cpu, &buf, pc_before);
+        if (len > 0) {
+            dbg.log("{s}  A={X:0>2} B={X:0>2} C={X:0>2} SP={X:0>2} PSW={X:0>2}", .{ buf[0..len], cpu.a, cpu.b, cpu.c, cpu.sp, @as(u8, @bitCast(cpu.psw)) });
+        }
+    }
+
     switch (dec.inst) {
         .nop => {},
         .br => {
@@ -548,6 +567,9 @@ pub fn step(cpu: *Cpu) u8 {
             cpu.sp -%= 1;
             cpu.pc = (@as(u16, hi) << 8) | @as(u16, lo);
             cpu.interrupt_depth = 0;
+            if (dbg.log_level == .trace) {
+                dbg.log("RETI -> PC={X:0>4}", .{cpu.pc});
+            }
         },
         .dbnz_d9, .dbnz_ri => {
             //(PC) ← (PC) + 3, (d9) = (d9)-1, if (d9) ≠ 0 then (PC) ← (PC) + r8
@@ -576,6 +598,18 @@ pub fn step(cpu: *Cpu) u8 {
     const used = cycles(dec);
     cpu.tickTimers(used);
     cpu.servicePendingInterrupt();
+
+    if (cpu.halted and dec.inst != .nop) {
+        dbg.log(">>> HALT at PC={X:0>4} IE={X:0>2} BTCR={X:0>2} T0CNT={X:0>2} T1CNT={X:0>2} P3INT={X:0>2}", .{
+            cpu.pc,
+            cpu.sfr_raw[0x08],
+            cpu.sfr_raw[0x7F],
+            cpu.sfr_raw[0x10],
+            cpu.sfr_raw[0x18],
+            cpu.sfr_raw[0x4E],
+        });
+    }
+
     return used;
 }
 
@@ -584,7 +618,7 @@ fn signExt8(val: u8) u16 {
 }
 
 fn readIndirectAddr(cpu: *Cpu, ri: u2) u9 {
-    const irbk = (@as(u8, @bitCast(cpu.psw)) >> 3) & 0b110;
+    const irbk = (@as(u8, @bitCast(cpu.psw)) >> 3) & 0b11;
     const reg_addr: u4 = @truncate(irbk | @as(u4, ri));
     const reg_val = cpu.ram_bank0[reg_addr];
     const bit8: u9 = if (ri & 2 != 0) 0x100 else 0;
@@ -599,7 +633,7 @@ fn readEA(cpu: *Cpu, dec: DecodeResult) u9 {
     return switch (dec.mode) {
         .d9 => decodeD9addr(dec, cpu),
         .ri => readIndirectAddr(cpu, @as(u2, @intCast(dec.ri.?))),
-        else => unreachable,
+        .impl, .imm => 0, // safety fallback — shouldn't happen with correct opcodes
     };
 }
 
@@ -608,7 +642,7 @@ fn readOp8(cpu: *Cpu, dec: DecodeResult) u8 {
         .imm => cpu.fetch8(),
         .d9 => cpu.load8(decodeD9addr(dec, cpu)),
         .ri => cpu.load8(readIndirectAddr(cpu, @as(u2, @intCast(dec.ri.?)))),
-        else => unreachable,
+        .impl => 0, // safety fallback
     };
 }
 

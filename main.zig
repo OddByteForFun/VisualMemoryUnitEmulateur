@@ -1,0 +1,147 @@
+const std = @import("std");
+const Cpu = @import("lc86K").Cpu;
+const decode = @import("decode");
+const step = decode.step;
+const rl = @import("raylib");
+const dbg = @import("debug");
+
+const LCD_W = 48;
+const LCD_H = 32;
+const BYTES_PER_ROW: u32 = LCD_W / 8;
+const SCALE: i32 = 10;
+const FG = rl.Color.init(30, 30, 20, 255);
+
+pub fn main(init: std.process.Init) !void {
+    var arg_iter = try std.process.Args.Iterator.initAllocator(init.minimal.args, init.arena.allocator());
+    defer arg_iter.deinit();
+    _ = arg_iter.skip();
+
+    const rom_path = arg_iter.next() orelse {
+        std.debug.print("Usage: lc86K <rom.bin>\n", .{});
+        return;
+    };
+
+    const dir = std.Io.Dir.cwd();
+    const file = try dir.openFile(init.io, rom_path, .{});
+    defer file.close(init.io);
+
+    const rom = init.arena.allocator().alloc(u8, 65536) catch unreachable;
+    @memset(rom, 0);
+    const n = try file.readPositionalAll(init.io, rom[0..65536], 0);
+    std.debug.print("ROM: {d} bytes\n", .{n});
+
+    var cpu = Cpu.init(rom);
+    cpu.reset();
+
+    dbg.init();
+    dbg.log_level = .trace;
+    dbg.enableFileLog();
+    dbg.log("=== VMU Emulator Start === ROM: {s} ({d} bytes)", .{ rom_path, n });
+
+    const win_w: i32 = LCD_W * SCALE;
+    const win_h: i32 = LCD_H * SCALE + 24;
+    rl.initWindow(win_w, win_h, "LC86K VMU Emulator");
+    defer rl.closeWindow();
+    defer flushLogFile(init);
+    rl.setTargetFPS(60);
+
+    var cycles: u64 = 0;
+    var frames: u64 = 0;
+    var prev_pc: u16 = 0;
+    var stuck_count: u32 = 0;
+
+    while (!rl.windowShouldClose()) {
+        updateButtons(&cpu);
+
+        // Flush log file periodically (every 300 frames ~ 5s)
+        if (frames % 300 == 0 and dbg.file_buf_pos > 0) {
+            flushLogFile(init);
+            dbg.clearLogData();
+        }
+
+        const cycles_per_frame: u64 = 100_000;
+        var i: u64 = 0;
+        while (i < cycles_per_frame) : (i += 1) {
+            _ = step(&cpu);
+            cycles += 1;
+        }
+
+        if (!cpu.halted) {
+            if (cpu.pc == prev_pc) {
+                stuck_count += 1;
+            } else {
+                stuck_count = 0;
+                prev_pc = cpu.pc;
+            }
+            if (stuck_count == 300) {
+                dbg.log("STUCK at PC={X:0>4}", .{cpu.pc});
+            }
+        } else {
+            stuck_count = 0;
+        }
+
+        rl.beginDrawing();
+        rl.clearBackground(rl.Color.init(40, 40, 40, 255));
+        renderLcd(&cpu);
+
+        var buf: [128]u8 = undefined;
+        const status = std.fmt.bufPrintZ(&buf, "PC=0x{X:0>4}  cyc={d}", .{ cpu.pc, cycles }) catch "??";
+        rl.drawText(status, 4, win_h - 18, 14, rl.Color.white);
+
+        rl.endDrawing();
+        frames += 1;
+    }
+}
+
+fn renderLcd(cpu: *Cpu) void {
+    var y: u32 = 0;
+    while (y < LCD_H) : (y += 1) {
+        var x_byte: u32 = 0;
+        while (x_byte < BYTES_PER_ROW) : (x_byte += 1) {
+            const byte = getXramByte(cpu, y, x_byte);
+            var bit: u3 = 7;
+            while (true) : (bit -%= 1) {
+                if (byte & (@as(u8, 1) << @intCast(bit)) != 0) {
+                    const px: i32 = @intCast(x_byte * 8 + (7 - @as(u32, bit)));
+                    const py: i32 = @intCast(y);
+                    rl.drawRectangle(px * SCALE, py * SCALE, SCALE, SCALE, FG);
+                }
+                if (bit == 0) break;
+            }
+        }
+    }
+}
+
+fn getXramByte(cpu: *Cpu, row: u32, byte_col: u32) u8 {
+    if (row >= LCD_H) return 0;
+    const offset = row * BYTES_PER_ROW + byte_col;
+    if (offset < 96) return cpu.xram_banks.bank0[offset];
+    if (offset < 192) return cpu.xram_banks.bank1[offset - 96];
+    return 0;
+}
+
+fn updateButtons(cpu: *Cpu) void {
+    var buttons: u8 = 0xFF;
+    if (rl.isKeyDown(.right)) buttons &= ~@as(u8, 0x01);
+    if (rl.isKeyDown(.left)) buttons &= ~@as(u8, 0x02);
+    if (rl.isKeyDown(.down)) buttons &= ~@as(u8, 0x04);
+    if (rl.isKeyDown(.up)) buttons &= ~@as(u8, 0x08);
+    if (rl.isKeyDown(.z)) buttons &= ~@as(u8, 0x40);
+    if (rl.isKeyDown(.x)) buttons &= ~@as(u8, 0x80);
+    cpu.p3_buttons = buttons;
+}
+
+fn flushLogFile(init: std.process.Init) void {
+    const data = dbg.getLogData();
+    if (data.len == 0) return;
+    const dir = std.Io.Dir.cwd();
+    const file = dir.createFile(init.io, "vmu_trace.log", .{}) catch |err| {
+        std.debug.print("Cannot create vmu_trace.log: {}\n", .{err});
+        return;
+    };
+    defer file.close(init.io);
+    file.writePositionalAll(init.io, data, 0) catch |err| {
+        std.debug.print("Cannot write vmu_trace.log: {}\n", .{err});
+    };
+    std.debug.print("Trace log written: {d} bytes -> vmu_trace.log\n", .{data.len});
+}

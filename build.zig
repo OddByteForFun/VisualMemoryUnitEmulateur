@@ -17,10 +17,39 @@ pub fn build(b: *std.Build) void {
     });
     decode_mod.addImport("lc86K", lc86K_mod);
 
+    const debug_mod = b.createModule(.{
+        .root_source_file = b.path("debug.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    debug_mod.addImport("lc86K", lc86K_mod);
+
+    decode_mod.addImport("debug", debug_mod);
+
+    const main_mod = b.createModule(.{
+        .root_source_file = b.path("main.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    main_mod.addImport("lc86K", lc86K_mod);
+    main_mod.addImport("decode", decode_mod);
+    main_mod.addImport("debug", debug_mod);
+
+    const raylib_dep = b.dependency("raylib_zig", .{
+        .target = target,
+        .optimize = optimize,
+    });
+
+    const raylib = raylib_dep.module("raylib");
+    const raylib_artifact = raylib_dep.artifact("raylib");
+
+    main_mod.addImport("raylib", raylib);
+
     const exe = b.addExecutable(.{
         .name = "lc86K",
-        .root_module = lc86K_mod,
+        .root_module = main_mod,
     });
+    exe.root_module.linkLibrary(raylib_artifact);
     b.installArtifact(exe);
 
     const run_step = b.step("run", "Run the app");

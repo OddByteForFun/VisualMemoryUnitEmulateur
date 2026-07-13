@@ -48,6 +48,10 @@ pub const Cpu = struct {
     t0h_counter: u8 = 0,
     t0_prescaler_acc: u16 = 0,
 
+    // Timer 1
+    t1l_counter: u8 = 0,
+    t1h_counter: u8 = 0,
+
     // base timer
     base_timer_acc: u32 = 0,
     base_timer_counter: u16 = 0,
@@ -56,8 +60,11 @@ pub const Cpu = struct {
     interrupt_depth: u8 = 0, // verifier sur une IRQ est possible (0, ok, 1 attente RETI)
     interrupt_blocked: u8 = 0,
 
+    // Ports I/O
+    p3_buttons: u8 = 0xFF, // état physique des boutons (active-low, 1=relâché)
+
     pub fn init(rom: []u8) Cpu {
-        return Cpu{
+        var cpu = Cpu{
             .inst_bank = .{
                 .data = rom,
                 .bank_id = .rom,
@@ -73,6 +80,12 @@ pub const Cpu = struct {
             .work_ram = .{0} ** 512,
             .flash = .{0} ** 131072,
         };
+        // VMU hardware SFR reset defaults (table 2.6, p.158)
+        cpu.sfr_raw[SFR_P1FCR] = 0xBF; // 146H: Port 1 function control
+        cpu.sfr_raw[SFR_P3INT] = 0xFD; // 14EH: Port 3 interrupt
+        cpu.sfr_raw[SFR_ISL] = 0xC0; // 15FH: Input signal select
+        cpu.sfr_raw[SFR_BTCR] = 0x41; // 17FH: Base timer control (BT0_CYCLE + BT0_IE)
+        return cpu;
     }
 
     pub fn reset(self: *Cpu) void {
@@ -94,8 +107,15 @@ pub const Cpu = struct {
         self.t0l_counter = 0;
         self.t0h_counter = 0;
         self.t0_prescaler_acc = 0;
+        self.t1l_counter = 0;
+        self.t1h_counter = 0;
         self.base_timer_acc = 0;
         self.base_timer_counter = 0;
+        // VMU hardware SFR reset defaults (table 2.6, p.158)
+        self.sfr_raw[SFR_P1FCR] = 0xBF; // 146H: Port 1 function control
+        self.sfr_raw[SFR_P3INT] = 0xFD; // 14EH: Port 3 interrupt
+        self.sfr_raw[SFR_ISL] = 0xC0; // 15FH: Input signal select
+        self.sfr_raw[SFR_BTCR] = 0x41; // 17FH: Base timer control (BT0_CYCLE + BT0_IE)
     }
 
     pub fn currentRamBank(self: *Cpu) *[256]u8 {
@@ -209,6 +229,74 @@ pub const Cpu = struct {
         }
     }
 
+    // ── Timer 1 ──────────────────────────────────────────────
+    // Pas de prescaler : le timer tourne à la fréquence cycle clock (≈ 6 MHz)
+    // Mode 0 (T1LONG=0) : deux timers 8 bits indépendants (T1L, T1H)
+    // Mode 2 (T1LONG=1) : timer 16 bits reload (T1L overflow → T1H)
+    // Horloge T1L en mode 2 : Tcyc si T1HRUN=1, Tcyc/2 si T1HRUN=0
+
+    pub fn tickTimer1(self: *Cpu, cycles_used: u8) void {
+        const t1cnt = self.sfr_raw[SFR_T1CNT];
+        var i: u8 = 0;
+        while (i < cycles_used) : (i += 1) {
+            if (t1cnt & T1CNT_T1LONG != 0) {
+                self.incrementT1Mode2();
+            } else {
+                self.incrementT1Mode0();
+            }
+        }
+    }
+
+    fn incrementT1Mode0(self: *Cpu) void {
+        const t1cnt = self.sfr_raw[SFR_T1CNT];
+
+        if (t1cnt & T1CNT_T1LRUN != 0) {
+            const old = self.t1l_counter;
+            self.t1l_counter +%= 1;
+            if (old == 0xFF) {
+                self.t1l_counter = self.sfr_raw[SFR_T1L]; // reload depuis T1LR (même adresse)
+                self.sfr_raw[SFR_T1CNT] |= T1CNT_T1LOVF;
+            }
+        }
+
+        if (t1cnt & T1CNT_T1HRUN != 0) {
+            const old = self.t1h_counter;
+            self.t1h_counter +%= 1;
+            if (old == 0xFF) {
+                self.t1h_counter = self.sfr_raw[SFR_T1H]; // reload depuis T1HR (même adresse)
+                self.sfr_raw[SFR_T1CNT] |= T1CNT_T1HOVF;
+            }
+        }
+    }
+
+    fn incrementT1Mode2(self: *Cpu) void {
+        var t1cnt = self.sfr_raw[SFR_T1CNT];
+
+        // Mode 2 : timer 16 bits cascade
+        // T1L incrémente chaque cycle si T1LRUN=1
+        if (t1cnt & T1CNT_T1LRUN != 0) {
+            const old_l = self.t1l_counter;
+            self.t1l_counter +%= 1;
+
+            if (old_l == 0xFF) {
+                self.t1l_counter = self.sfr_raw[SFR_T1L]; // reload T1LR
+                t1cnt |= T1CNT_T1LOVF;
+
+                // T1L overflow → incrémente T1H si T1HRUN=1
+                if (t1cnt & T1CNT_T1HRUN != 0) {
+                    const old_h = self.t1h_counter;
+                    self.t1h_counter +%= 1;
+                    if (old_h == 0xFF) {
+                        self.t1h_counter = self.sfr_raw[SFR_T1H]; // reload T1HR
+                        t1cnt |= T1CNT_T1HOVF;
+                    }
+                }
+            }
+        }
+
+        self.sfr_raw[SFR_T1CNT] = t1cnt;
+    }
+
     pub fn tickBaseTimer(self: *Cpu, cycles_used: u8) void {
         const btcr = self.sfr_raw[SFR_BTCR];
 
@@ -235,6 +323,7 @@ pub const Cpu = struct {
 
     pub fn tickTimers(self: *Cpu, cycles_used: u8) void {
         self.tickTimer0(cycles_used);
+        self.tickTimer1(cycles_used);
         self.tickBaseTimer(cycles_used);
     }
 
@@ -248,6 +337,8 @@ pub const Cpu = struct {
         int2, // t0l
         int3, // base timer
         t0h, // t0h
+        t1, // timer 1 (T1H ou T1L overflow)
+        p3, // Port 3 level interrupt (buttons)
     };
 
     pub fn servicePendingInterrupt(self: *Cpu) void {
@@ -266,21 +357,43 @@ pub const Cpu = struct {
 
         if (ie & 0x80 == 0) return; // pas d'interruptions autorisées (EA)
 
-        if (t0cnt & T0CNT_T0LOVF != 0 and t0cnt & T0CNT_T0LIE != 0 and ie & IP_int2 != 0) {
+        // Sur le vrai LC86K, IE ne contient que EA (bit7) + IE1/IE0 (priorité INT0/INT1).
+        // Les enables individuels sont dans les registres des périphériques (T0CNT, BTCR, T1CNT).
+        if (t0cnt & T0CNT_T0LOVF != 0 and t0cnt & T0CNT_T0LIE != 0) {
             val = .int2;
-        } else if (ie & IP_int3 != 0 and
-            ((btcr & BTCR_BT0_FLAG != 0 and btcr & BTCR_BT0_IE != 0) or
-            (btcr & BTCR_BT1_FLAG != 0 and btcr & BTCR_BT1_IE != 0)))
+        } else if ((btcr & BTCR_BT0_FLAG != 0 and btcr & BTCR_BT0_IE != 0) or
+            (btcr & BTCR_BT1_FLAG != 0 and btcr & BTCR_BT1_IE != 0))
         {
             val = .int3;
-        } else if (t0cnt & T0CNT_T0HOVF != 0 and t0cnt & T0CNT_T0HIE != 0 and ie & IP_t0h != 0) {
+        } else if (t0cnt & T0CNT_T0HOVF != 0 and t0cnt & T0CNT_T0HIE != 0) {
             val = .t0h;
+        } else {
+            const t1cnt = self.sfr_raw[SFR_T1CNT];
+            if (t1cnt & T1CNT_T1HOVF != 0 and t1cnt & T1CNT_T1HIE != 0) {
+                val = .t1;
+            } else if (t1cnt & T1CNT_T1LOVF != 0 and t1cnt & T1CNT_T1LIE != 0) {
+                val = .t1;
+            }
+        }
+
+        // Port 3 interrupt (priority 10, vector 0x004BH)
+        // Level interrupt: fires continuously while any P3 pin is LOW (button pressed)
+        if (val == null) {
+            const p3int = self.sfr_raw[SFR_P3INT];
+            if (p3int & P3INT_P32INT != 0 and p3int & P3INT_P30INT != 0) {
+                if (self.p3_buttons != 0xFF) {
+                    val = .p3;
+                    self.sfr_raw[SFR_P3INT] |= P3INT_P31INT;
+                }
+            }
         }
 
         const vecteur: u16 = if (val) |irq| switch (irq) {
             .int2 => 0x0013,
             .int3 => 0x001B,
             .t0h => 0x0023,
+            .t1 => 0x002B,
+            .p3 => 0x004B,
         } else return;
 
         const return_addr = self.pc;
@@ -296,6 +409,10 @@ pub const Cpu = struct {
             .int2 => self.sfr_raw[SFR_T0CNT] &= ~T0CNT_T0LOVF,
             .int3 => self.sfr_raw[SFR_BTCR] &= ~(BTCR_BT0_FLAG | BTCR_BT1_FLAG),
             .t0h => self.sfr_raw[SFR_T0CNT] &= ~T0CNT_T0HOVF,
+            .t1 => {
+                self.sfr_raw[SFR_T1CNT] &= ~(T1CNT_T1HOVF | T1CNT_T1LOVF);
+            },
+            .p3 => {}, // P31INT source flag stays set until cleared by ISR
         };
     }
 
@@ -317,8 +434,16 @@ pub const Cpu = struct {
     const SFR_T0LR: u7 = 0x13; // Lecture écriture du reload
     const SFR_T0H: u7 = 0x14; // compteur high courant
     const SFR_T0HR: u7 = 0x15; //  reload high
-    const SFR_T0CNT: u7 = 0x4E; //  contrôle, flags et enables
+    const SFR_T0CNT: u7 = 0x10; //  contrôle, flags et enables (adresse hardware 0x110)
     const SFR_PCON: u7 = 0x07; // Power control (bit 0 = HALT mode)
+    const SFR_XBNK: u7 = 0x25; // Sélection banque XRAM (LCD)
+    const SFR_P1: u7 = 0x44; // Port 1 (série + PWM audio)
+    const SFR_P1DDR: u7 = 0x45; // Port 1 data direction
+    const SFR_P1FCR: u7 = 0x46; // Port 1 function control
+    const SFR_P3: u7 = 0x4C; // Port 3 (boutons, input-only)
+    const SFR_P3DDR: u7 = 0x4D; // Port 3 data direction (ne pas modifier)
+    const SFR_P3INT: u7 = 0x4E; // Port 3 interrupt control
+    const SFR_P7: u7 = 0x5C; // Port 7 (détection tension, read-only)
     const SFR_I23CR: u7 = 0x5E; // sélection front externe INT2/INT3
     const SFR_ISL: u7 = 0x5F; //  sélection entrée externe et horloge
 
@@ -331,6 +456,27 @@ pub const Cpu = struct {
     const T0CNT_T0HIE: u8 = 0x04; // T0H interrupt request enabled
     const T0CNT_T0LOVF: u8 = 0x02; // utilisé pour les interruptions mode 0
     const T0CNT_T0LIE: u8 = 0x01; // T0L interrupt request enabled
+
+    // Timer 1 — SFR offsets (0x118-0x11D → offset - 0x100)
+    const SFR_T1CNT: u7 = 0x18; // control, flags, enables
+    const SFR_T1LC: u7 = 0x1A; // low comparator data
+    const SFR_T1L: u7 = 0x1B; // low counter (read) / T1LR reload (write)
+    const SFR_T1HC: u7 = 0x1C; // high comparator data
+    const SFR_T1H: u7 = 0x1D; // high counter (read) / T1HR reload (write)
+
+    // P3INT bits
+    const P3INT_P30INT: u8 = 0x01; // bit 0: interrupt request enable
+    const P3INT_P31INT: u8 = 0x02; // bit 1: interrupt source flag (set when LOW detected)
+    const P3INT_P32INT: u8 = 0x04; // bit 2: interrupt generation enable
+
+    // T1CNT bits
+    const T1CNT_T1HRUN: u8 = 0x80; // T1H count control
+    const T1CNT_T1LRUN: u8 = 0x40; // T1L count control
+    const T1CNT_T1LONG: u8 = 0x20; // 0=mode 0/1 (8-bit), 1=mode 2/3 (16-bit)
+    const T1CNT_T1HOVF: u8 = 0x08; // T1H overflow flag
+    const T1CNT_T1HIE: u8 = 0x04; // T1H interrupt request enable
+    const T1CNT_T1LOVF: u8 = 0x02; // T1L overflow flag
+    const T1CNT_T1LIE: u8 = 0x01; // T1L interrupt request enable
 
     // Base Timer
     const SFR_BTCR: u7 = 0x7F; // gestion notamment des interruptions du base timer
@@ -368,6 +514,9 @@ pub const Cpu = struct {
             SFR_SP => self.sp,
             SFR_T0L => self.t0l_counter,
             SFR_T0H => self.t0h_counter,
+            SFR_T1L => self.t1l_counter,
+            SFR_T1H => self.t1h_counter,
+            SFR_P3 => self.p3_buttons, // lecture physique des boutons (active-low)
             else => self.sfr_raw[offset],
         };
     }
@@ -418,28 +567,64 @@ pub const Cpu = struct {
                     self.base_timer_acc = 0;
                 }
             },
+            SFR_T1L => {
+                // T1L et T1LR partagent la même adresse : écriture = reload
+                self.sfr_raw[SFR_T1L] = val;
+                if (self.sfr_raw[SFR_T1CNT] & T1CNT_T1LRUN == 0) {
+                    self.t1l_counter = val;
+                }
+            },
+            SFR_T1H => {
+                // T1H et T1HR partagent la même adresse : écriture = reload
+                self.sfr_raw[SFR_T1H] = val;
+                if (self.sfr_raw[SFR_T1CNT] & T1CNT_T1HRUN == 0) {
+                    self.t1h_counter = val;
+                }
+            },
+            SFR_T1CNT => {
+                // Si T1LRUN passe à 0 → reload T1L depuis T1LR
+                if (val & T1CNT_T1LRUN == 0) {
+                    self.t1l_counter = self.sfr_raw[SFR_T1L];
+                }
+                // Si T1HRUN passe à 0 → reload T1H depuis T1HR
+                if (val & T1CNT_T1HRUN == 0) {
+                    self.t1h_counter = self.sfr_raw[SFR_T1H];
+                }
+            },
 
             else => {},
         }
     }
 
     pub fn loadXram(self: *Cpu, offset: u7) u8 {
-        _ = self;
-        _ = offset;
-        // TODO: dispatch XBNK
-        return 0xFF;
+        const xbnk = self.sfr_raw[SFR_XBNK] & 0x03;
+        return switch (xbnk) {
+            0 => if (offset < 96) self.xram_banks.bank0[offset] else 0xFF,
+            1 => if (offset < 96) self.xram_banks.bank1[offset] else 0xFF,
+            2 => if (offset < 6) self.xram_banks.bank2[offset] else 0xFF,
+            else => 0xFF,
+        };
     }
 
     pub fn storeXram(self: *Cpu, offset: u7, val: u8) void {
-        _ = self;
-        _ = offset;
-        _ = val;
-        // TODO: dispatch XBNK
+        const xbnk = self.sfr_raw[SFR_XBNK] & 0x03;
+        switch (xbnk) {
+            0 => {
+                if (offset < 96) self.xram_banks.bank0[offset] = val;
+            },
+            1 => {
+                if (offset < 96) self.xram_banks.bank1[offset] = val;
+            },
+            2 => {
+                if (offset < 6) self.xram_banks.bank2[offset] = val;
+            },
+            else => {},
+        }
     }
 
     pub fn fetch8(self: *Cpu) u8 {
         const val = self.inst_bank.data[self.pc];
-        self.pc += 1;
+        self.pc +%= 1;
         return val;
     }
 
@@ -461,9 +646,4 @@ pub const Cpu = struct {
     }
 };
 
-pub fn main() void {
-    const rom = std.heap.page_allocator.alloc(u8, 65536) catch unreachable;
-    defer std.heap.page_allocator.free(rom);
-    var cpu = Cpu.init(rom);
-    cpu.reset();
-}
+pub fn main() void {}
