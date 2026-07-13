@@ -255,6 +255,11 @@ fn cycles(dec: DecodeResult) u8 {
 }
 
 pub fn step(cpu: *Cpu) u8 {
+    if (cpu.halted) {
+        cpu.tickTimers(1);
+        cpu.servicePendingInterrupt();
+        return 1;
+    }
     const opcode = cpu.fetch8();
     const dec = decodeOpcode(opcode);
     switch (dec.inst) {

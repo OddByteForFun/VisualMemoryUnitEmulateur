@@ -210,10 +210,26 @@ pub const Cpu = struct {
     }
 
     pub fn tickBaseTimer(self: *Cpu, cycles_used: u8) void {
+        const btcr = self.sfr_raw[SFR_BTCR];
+
+        // BTCR6 (bit 6) = 0 → base timer arrêté, counter clear
+        if (btcr & BTCR_BT_RUN == 0) return;
+
         self.base_timer_acc += cycles_used;
-        if (self.base_timer_acc >= BASE_TIMER_HALF_SECOND_CYCLES) {
-            self.base_timer_acc -= BASE_TIMER_HALF_SECOND_CYCLES;
-            self.sfr_raw[SFR_BTCR] |= BTCR_BT0_FLAG;
+        while (self.base_timer_acc >= CYCLES_PER_FBST_TICK) {
+            self.base_timer_acc -= CYCLES_PER_FBST_TICK;
+            self.base_timer_counter = (self.base_timer_counter + 1) & 0x3FFF; // 14-bit
+
+            // BT0 : overflow du compteur 14-bit (16384 ticks = ~0.5s)
+            if (self.base_timer_counter == 0) {
+                self.sfr_raw[SFR_BTCR] |= BTCR_BT0_FLAG;
+            }
+
+            // BT1 : seuil configurable selon BTCR5:BTCR4
+            const bt1_idx: u2 = @truncate((btcr & (BTCR_BT1_CYCLE_HI | BTCR_BT1_CYCLE_LO)) >> 4);
+            if (self.base_timer_counter == BT1_THRESHOLDS[bt1_idx]) {
+                self.sfr_raw[SFR_BTCR] |= BTCR_BT1_FLAG;
+            }
         }
     }
 
@@ -252,7 +268,10 @@ pub const Cpu = struct {
 
         if (t0cnt & T0CNT_T0LOVF != 0 and t0cnt & T0CNT_T0LIE != 0 and ie & IP_int2 != 0) {
             val = .int2;
-        } else if (btcr & BTCR_BT0_FLAG != 0 and btcr & BTCR_BT0_IE != 0 and ie & IP_int3 != 0) {
+        } else if (ie & IP_int3 != 0 and
+            ((btcr & BTCR_BT0_FLAG != 0 and btcr & BTCR_BT0_IE != 0) or
+            (btcr & BTCR_BT1_FLAG != 0 and btcr & BTCR_BT1_IE != 0)))
+        {
             val = .int3;
         } else if (t0cnt & T0CNT_T0HOVF != 0 and t0cnt & T0CNT_T0HIE != 0 and ie & IP_t0h != 0) {
             val = .t0h;
@@ -271,6 +290,13 @@ pub const Cpu = struct {
         self.ram_bank0[self.sp] = @truncate(return_addr >> 8);
         self.pc = vecteur;
         self.interrupt_depth = 1;
+        self.halted = false;
+
+        if (val) |irq| switch (irq) {
+            .int2 => self.sfr_raw[SFR_T0CNT] &= ~T0CNT_T0LOVF,
+            .int3 => self.sfr_raw[SFR_BTCR] &= ~(BTCR_BT0_FLAG | BTCR_BT1_FLAG),
+            .t0h => self.sfr_raw[SFR_T0CNT] &= ~T0CNT_T0HOVF,
+        };
     }
 
     // il s'agit de définir les offsets utilisés par load8 qui ajoute 0x100 à ces valeurs.
@@ -292,6 +318,7 @@ pub const Cpu = struct {
     const SFR_T0H: u7 = 0x14; // compteur high courant
     const SFR_T0HR: u7 = 0x15; //  reload high
     const SFR_T0CNT: u7 = 0x4E; //  contrôle, flags et enables
+    const SFR_PCON: u7 = 0x07; // Power control (bit 0 = HALT mode)
     const SFR_I23CR: u7 = 0x5E; // sélection front externe INT2/INT3
     const SFR_ISL: u7 = 0x5F; //  sélection entrée externe et horloge
 
@@ -307,20 +334,28 @@ pub const Cpu = struct {
 
     // Base Timer
     const SFR_BTCR: u7 = 0x7F; // gestion notamment des interruptions du base timer
-    const BTCR_BT0_FLAG: u8 = 0x02;
-    const BASE_TIMER_HALF_SECOND_CYCLES: u32 = 3_000_000;
+    const BTCR_BT0_IE: u8 = 0x01; // bit 0: BT0 request enable
+    const BTCR_BT0_FLAG: u8 = 0x02; // bit 1: BT0 source flag
+    const BTCR_BT1_IE: u8 = 0x04; // bit 2: BT1 request enable
+    const BTCR_BT1_FLAG: u8 = 0x08; // bit 3: BT1 source flag
+    const BTCR_BT1_CYCLE_LO: u8 = 0x10; // bit 4: BT1 cycle control low
+    const BTCR_BT1_CYCLE_HI: u8 = 0x20; // bit 5: BT1 cycle control high
+    const BTCR_BT_RUN: u8 = 0x40; // bit 6: base timer start/stop
+    const BTCR_BT0_CYCLE: u8 = 0x80; // bit 7: BT0 cycle control (0: 16384/fBST, 1: 64/fBST fast-forward)
+
+    // fBST = 32768 Hz quartz. CPU ≈ 6 MHz. 1 tick fBST ≈ 183 cycles CPU.
+    const CPU_FREQ: u32 = 6_000_000;
+    const FST_FREQ: u32 = 32_768;
+    const CYCLES_PER_FBST_TICK: u32 = CPU_FREQ / FST_FREQ; // 183
+    const BT1_THRESHOLDS: [4]u16 = .{ 32, 128, 512, 2048 }; // cycles fBST selon BTCR5:BTCR4
 
     // Priorisation des interruptions (bits du registre IE)
-
     const IP_int2: u8 = 0x04; // IE bit 2 = ET2 (INT2_T0L)
     const IP_int3: u8 = 0x08; // IE bit 3 = ET3 (INT3_BT)
     const IP_t0h: u8 = 0x10; // IE bit 4 = ET0H (T0H)
     const IP_T1: u8 = 0x20; // IE bit 5 = ET1 (Timer 1)
     const IP_SIO0: u8 = 0x40; // IE bit 6
     const IP_SIO1: u8 = 0x80; // IE bit 7
-
-    // Bits du registre BTCR (Base Timer)
-    const BTCR_BT0_IE: u8 = 0x01;
 
     pub fn loadSFR(self: *Cpu, offset: u7) u8 {
         return switch (offset) {
@@ -364,12 +399,23 @@ pub const Cpu = struct {
                     self.t0h_counter = val;
                 }
             },
+            SFR_PCON => {
+                if (val & 0x01 != 0) {
+                    self.halted = true;
+                }
+            },
             SFR_T0CNT => {
                 if (val & T0CNT_T0LRUN == 0) {
                     self.t0l_counter = self.sfr_raw[SFR_T0LR];
                 }
                 if (val & T0CNT_T0HRUN == 0) {
                     self.t0h_counter = self.sfr_raw[SFR_T0HR];
+                }
+            },
+            SFR_BTCR => {
+                if (val & BTCR_BT_RUN == 0) {
+                    self.base_timer_counter = 0;
+                    self.base_timer_acc = 0;
                 }
             },
 
