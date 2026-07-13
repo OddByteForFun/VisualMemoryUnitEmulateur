@@ -53,8 +53,8 @@ pub fn main(init: std.process.Init) !void {
     while (!rl.windowShouldClose()) {
         updateButtons(&cpu);
 
-        // Flush log file periodically (every 300 frames ~ 5s)
-        if (frames % 300 == 0 and dbg.file_buf_pos > 0) {
+        // Flush log file periodically (every 60 frames ~ 1s)
+        if (frames % 60 == 0 and dbg.file_buf_pos > 0) {
             flushLogFile(init);
             dbg.clearLogData();
         }
@@ -85,7 +85,7 @@ pub fn main(init: std.process.Init) !void {
         renderLcd(&cpu);
 
         var buf: [128]u8 = undefined;
-        const status = std.fmt.bufPrintZ(&buf, "PC=0x{X:0>4}  cyc={d}", .{ cpu.pc, cycles }) catch "??";
+        const status = std.fmt.bufPrintZ(&buf, "PC=0x{X:0>4}  cyc={d}  halted={}  frames={d}  xram_wr={d}", .{ cpu.pc, cycles, cpu.halted, frames, cpu.xram_write_count }) catch "??";
         rl.drawText(status, 4, win_h - 18, 14, rl.Color.white);
 
         rl.endDrawing();

@@ -63,6 +63,9 @@ pub const Cpu = struct {
     // Ports I/O
     p3_buttons: u8 = 0xFF, // état physique des boutons (active-low, 1=relâché)
 
+    // diagnostic
+    xram_write_count: u32 = 0,
+
     pub fn init(rom: []u8) Cpu {
         var cpu = Cpu{
             .inst_bank = .{
@@ -139,6 +142,12 @@ pub const Cpu = struct {
                 self.storeSFR(@as(u7, @truncate(addr - 0x100)), val);
             },
             0x180...0x1FF => {
+                self.xram_write_count += 1;
+                if (self.xram_write_count <= 50) {
+                    std.debug.print("XRAM WRITE #{d} addr={X:0>3} val={X:0>2} xbnk={d}\n", .{ self.xram_write_count, addr, val, self.sfr_raw[SFR_XBNK] & 0x03 });
+                } else if (self.xram_write_count == 51) {
+                    std.debug.print("... (further XRAM writes suppressed)\n", .{});
+                }
                 self.storeXram(@as(u7, @truncate(addr - 0x180)), val);
             },
         }
@@ -560,6 +569,15 @@ pub const Cpu = struct {
                 if (val & T0CNT_T0HRUN == 0) {
                     self.t0h_counter = self.sfr_raw[SFR_T0HR];
                 }
+            },
+            0x20 => { // MCR (LCD Mode Control)
+                std.debug.print("MCR write val={X:0>2} (MCR3={d} ctrl, MCR0={d} graphic)\n", .{ val, (val >> 3) & 1, val & 1 });
+            },
+            0x27 => { // VCCR (LCD contrast/power)
+                std.debug.print("VCCR write val={X:0>2} (VCCR7={d} LCD on)\n", .{ val, (val >> 7) & 1 });
+            },
+            0x22 => { // STAD (Display start address)
+                std.debug.print("STAD write val={X:0>2}\n", .{val});
             },
             SFR_BTCR => {
                 if (val & BTCR_BT_RUN == 0) {
