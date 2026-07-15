@@ -9,7 +9,8 @@ const LCD_W = 48;
 const LCD_H = 32;
 const BYTES_PER_ROW: u32 = LCD_W / 8;
 const SCALE: i32 = 10;
-const FG = rl.Color.init(30, 30, 20, 255);
+const FG = rl.Color.init(20, 20, 20, 255);
+const BG = rl.Color.init(190, 210, 180, 255);
 
 pub fn main(init: std.process.Init) !void {
     var arg_iter = try std.process.Args.Iterator.initAllocator(init.minimal.args, init.arena.allocator());
@@ -81,7 +82,7 @@ pub fn main(init: std.process.Init) !void {
         }
 
         rl.beginDrawing();
-        rl.clearBackground(rl.Color.init(40, 40, 40, 255));
+        rl.clearBackground(BG);
         renderLcd(&cpu);
 
         var buf: [128]u8 = undefined;
@@ -114,9 +115,11 @@ fn renderLcd(cpu: *Cpu) void {
 
 fn getXramByte(cpu: *Cpu, row: u32, byte_col: u32) u8 {
     if (row >= LCD_H) return 0;
-    const offset = row * BYTES_PER_ROW + byte_col;
-    if (offset < 96) return cpu.xram_banks.bank0[offset];
-    if (offset < 192) return cpu.xram_banks.bank1[offset - 96];
+    const xram_row = row / 2;
+    const row_in_pair = row % 2;
+    const offset = xram_row * 16 + row_in_pair * 6 + byte_col;
+    if (offset < 128) return cpu.xram_banks.bank0[offset];
+    if (offset < 256) return cpu.xram_banks.bank1[offset - 128];
     return 0;
 }
 
@@ -135,12 +138,13 @@ fn flushLogFile(init: std.process.Init) void {
     const data = dbg.getLogData();
     if (data.len == 0) return;
     const dir = std.Io.Dir.cwd();
-    const file = dir.createFile(init.io, "vmu_trace.log", .{}) catch |err| {
+    const file = dir.createFile(init.io, "vmu_trace.log", .{ .truncate = false }) catch |err| {
         std.debug.print("Cannot create vmu_trace.log: {}\n", .{err});
         return;
     };
     defer file.close(init.io);
-    file.writePositionalAll(init.io, data, 0) catch |err| {
+    const pos = file.length(init.io) catch 0;
+    file.writePositionalAll(init.io, data, pos) catch |err| {
         std.debug.print("Cannot write vmu_trace.log: {}\n", .{err});
     };
     std.debug.print("Trace log written: {d} bytes -> vmu_trace.log\n", .{data.len});

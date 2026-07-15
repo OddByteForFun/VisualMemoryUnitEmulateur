@@ -536,7 +536,8 @@ pub fn step(cpu: *Cpu) u8 {
             cpu.ram_bank0[cpu.sp] = @truncate(return_addr & 0xFF);
             cpu.sp +%= 1;
             cpu.ram_bank0[cpu.sp] = @truncate(return_addr >> 8);
-            cpu.pc = (@as(u16, hi) << 8) | @as(u16, lo);
+            const target = (@as(u16, hi) << 8) | @as(u16, lo);
+            cpu.pc = target;
         },
         .jmpf => {
             const hi = cpu.fetch8();
@@ -557,7 +558,9 @@ pub fn step(cpu: *Cpu) u8 {
         },
         .jmp_a12 => {
             const imm8 = cpu.fetch8();
-            const ad12 = (@as(u16, dec.opcode & 0x0F) << 8) | @as(u16, imm8);
+            const ad12 = ((@as(u16, dec.opcode & 0x10) << 7) |
+                (@as(u16, dec.opcode & 0x07) << 8) |
+                @as(u16, imm8));
             cpu.pc = (cpu.pc & 0xF000) | ad12;
         },
         .reti => {
@@ -567,9 +570,6 @@ pub fn step(cpu: *Cpu) u8 {
             cpu.sp -%= 1;
             cpu.pc = (@as(u16, hi) << 8) | @as(u16, lo);
             cpu.interrupt_depth = 0;
-            if (dbg.log_level == .trace) {
-                dbg.log("RETI -> PC={X:0>4}", .{cpu.pc});
-            }
         },
         .dbnz_d9, .dbnz_ri => {
             //(PC) ← (PC) + 3, (d9) = (d9)-1, if (d9) ≠ 0 then (PC) ← (PC) + r8
@@ -617,9 +617,17 @@ fn signExt8(val: u8) u16 {
     return @bitCast(@as(i16, @as(i8, @bitCast(val))));
 }
 
+//fn readIndirectAddr(cpu: *Cpu, ri: u2) u9 {
+//    const irbk = (@as(u8, @bitCast(cpu.psw)) >> 3) & 0b11;
+//    const reg_addr: u4 = @truncate(irbk | @as(u4, ri));
+//    const reg_val = cpu.ram_bank0[reg_addr];
+//    const bit8: u9 = if (ri & 2 != 0) 0x100 else 0;
+//    return bit8 | reg_val;
+//}
+
 fn readIndirectAddr(cpu: *Cpu, ri: u2) u9 {
-    const irbk = (@as(u8, @bitCast(cpu.psw)) >> 3) & 0b11;
-    const reg_addr: u4 = @truncate(irbk | @as(u4, ri));
+    const irbk: u4 = @truncate((@as(u8, @bitCast(cpu.psw)) >> 3) & 0b11);
+    const reg_addr: u4 = (irbk << 2) | @as(u4, ri);
     const reg_val = cpu.ram_bank0[reg_addr];
     const bit8: u9 = if (ri & 2 != 0) 0x100 else 0;
     return bit8 | reg_val;

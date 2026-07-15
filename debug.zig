@@ -149,7 +149,7 @@ pub fn disassembleAt(cpu: *Cpu, buf: []u8, pc: u16) usize {
                 const lo = rom[p];
                 const hi = rom[p + 1];
                 const offset = (@as(u16, hi) << 8) | @as(u16, lo);
-                const tgt: u16 = @intCast(@as(i16, @intCast(start_pc)) + 3 + @as(i16, @bitCast(offset)));
+                const tgt: u16 = start_pc +% 3 +% @as(u16, @bitCast(@as(i16, @bitCast(offset))));
                 return fmtA(buf, start_pc, "CALLR", tgt);
             },
             0x1 => {
@@ -196,7 +196,9 @@ pub fn disassembleAt(cpu: *Cpu, buf: []u8, pc: u16) usize {
             },
             0x8...0xF => {
                 const imm8 = rom[p];
-                const ad12 = (@as(u16, opcode & 0x0F) << 8) | @as(u16, imm8);
+                const ad12 = ((@as(u16, opcode & 0x10) << 7) |
+                    (@as(u16, opcode & 0x07) << 8) |
+                    @as(u16, imm8));
                 return fmtA(buf, start_pc, "JMP", (start_pc & 0xF000) | ad12);
             },
         },
@@ -212,10 +214,15 @@ pub fn disassembleAt(cpu: *Cpu, buf: []u8, pc: u16) usize {
                 _ = r8;
                 return fmtA(buf, start_pc, "BE", decodeD9Addr(opcode, d8));
             },
-            0x4...0x7 => return fmtI(buf, start_pc, "BE"),
+            0x4...0x7 => {
+                const ri: u2 = @intCast(col & 0x3);
+                return fmtR(buf, start_pc, "BE", ri);
+            },
             0x8...0xF => {
                 const imm8 = rom[p];
-                const ad12 = (@as(u16, opcode & 0x0F) << 8) | @as(u16, imm8);
+                const ad12 = ((@as(u16, opcode & 0x10) << 7) |
+                    (@as(u16, opcode & 0x07) << 8) |
+                    @as(u16, imm8));
                 return fmtA(buf, start_pc, "JMP", (start_pc & 0xF000) | ad12);
             },
         },
@@ -230,7 +237,10 @@ pub fn disassembleAt(cpu: *Cpu, buf: []u8, pc: u16) usize {
                 _ = rom[p + 1];
                 return fmtA(buf, start_pc, "BNE", decodeD9Addr(opcode, d8));
             },
-            0x4...0x7 => return fmtI(buf, start_pc, "BNE"),
+            0x4...0x7 => {
+                const ri: u2 = @intCast(col & 0x3);
+                return fmtR(buf, start_pc, "BNE", ri);
+            },
             0x8...0xF => {
                 const d8 = rom[p];
                 const bit: u3 = @intCast(opcode & 0x07);
@@ -244,7 +254,10 @@ pub fn disassembleAt(cpu: *Cpu, buf: []u8, pc: u16) usize {
                 _ = rom[p + 1];
                 return fmtA(buf, start_pc, "DBNZ", decodeD9Addr(opcode, d8));
             },
-            0x4...0x7 => return fmtI(buf, start_pc, "DBNZ"),
+            0x4...0x7 => {
+                const ri: u2 = @intCast(col & 0x3);
+                return fmtR(buf, start_pc, "DBNZ", ri);
+            },
             0x8...0xF => {
                 const d8 = rom[p];
                 const bit: u3 = @intCast(opcode & 0x07);

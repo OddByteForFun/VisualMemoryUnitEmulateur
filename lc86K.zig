@@ -23,11 +23,12 @@ pub const Cpu = struct {
     ram_bank1: [256]u8, // bank 1 : application
     sfr_raw: [0x80]u8, // backing store pour 0x100-0x17F
     xram_banks: struct {
-        bank0: [96]u8, // XBNK=0 : LCD rows 0-15 (6B/row)
-        bank1: [96]u8, // XBNK=1 : LCD rows 16-31 (6B/row)
+        bank0: [128]u8, // XBNK=0 : LCD rows 0-15 (16B/row, dead cols 0xC-0xF)
+        bank1: [128]u8, // XBNK=1 : LCD rows 16-31
         bank2: [6]u8, // XBNK=2 : icônes
     },
     work_ram: [512]u8, // buffer DMA Maple (via VTRBF/VRMAD)
+    vrmad: u16 = 0, // adresse courante dans work_ram (combinée VRMAD2:VRMAD1)
 
     // Flash storage (128KB)
     flash: [131072]u8, // 2 banks × 64KB, filesystem FAT
@@ -76,18 +77,23 @@ pub const Cpu = struct {
             .ram_bank1 = .{0} ** 256,
             .sfr_raw = .{0} ** 0x80,
             .xram_banks = .{
-                .bank0 = .{0} ** 96,
-                .bank1 = .{0} ** 96,
+                .bank0 = .{0} ** 128,
+                .bank1 = .{0} ** 128,
                 .bank2 = .{0} ** 6,
             },
             .work_ram = .{0} ** 512,
             .flash = .{0} ** 131072,
         };
-        // VMU hardware SFR reset defaults (table 2.6, p.158)
+        cpu.sp = 0x7F; // Stack pointer (hardware reset default)
+        // VMU hardware SFR reset defaults (table 2.6, p.158 + DreamPotato reference)
+        cpu.sfr_raw[SFR_IE] = 0x80; // 108H: Master interrupt enable (EA=1)
+        cpu.sfr_raw[SFR_SP] = 0x7F; // 106H: Stack pointer
         cpu.sfr_raw[SFR_P1FCR] = 0xBF; // 146H: Port 1 function control
         cpu.sfr_raw[SFR_P3INT] = 0xFD; // 14EH: Port 3 interrupt
         cpu.sfr_raw[SFR_ISL] = 0xC0; // 15FH: Input signal select
         cpu.sfr_raw[SFR_BTCR] = 0x41; // 17FH: Base timer control (BT0_CYCLE + BT0_IE)
+        cpu.sfr_raw[SFR_VCCR] = 0x80; // 127H: LCD display control (VCCR7=1)
+        cpu.sfr_raw[SFR_VSEL] = 0xFC; // 163H: VTRBF control (INCE=1 + reset defaults)
         return cpu;
     }
 
@@ -96,7 +102,7 @@ pub const Cpu = struct {
         self.a = 0;
         self.b = 0;
         self.c = 0;
-        self.sp = 0;
+        self.sp = 0x7F;
         self.psw = .{};
         self.halted = false;
         @memset(&self.ram_bank0, 0);
@@ -114,11 +120,15 @@ pub const Cpu = struct {
         self.t1h_counter = 0;
         self.base_timer_acc = 0;
         self.base_timer_counter = 0;
-        // VMU hardware SFR reset defaults (table 2.6, p.158)
+        // VMU hardware SFR reset defaults (table 2.6, p.158 + DreamPotato reference)
+        self.sfr_raw[SFR_IE] = 0x80; // 108H: Master interrupt enable (EA=1)
+        self.sfr_raw[SFR_SP] = 0x7F; // 106H: Stack pointer
         self.sfr_raw[SFR_P1FCR] = 0xBF; // 146H: Port 1 function control
         self.sfr_raw[SFR_P3INT] = 0xFD; // 14EH: Port 3 interrupt
         self.sfr_raw[SFR_ISL] = 0xC0; // 15FH: Input signal select
         self.sfr_raw[SFR_BTCR] = 0x41; // 17FH: Base timer control (BT0_CYCLE + BT0_IE)
+        self.sfr_raw[SFR_VCCR] = 0x80; // 127H: LCD display control (VCCR7=1)
+        self.sfr_raw[SFR_VSEL] = 0xFC; // 163H: VTRBF control (INCE=1 + reset defaults)
     }
 
     pub fn currentRamBank(self: *Cpu) *[256]u8 {
@@ -143,9 +153,9 @@ pub const Cpu = struct {
             },
             0x180...0x1FF => {
                 self.xram_write_count += 1;
-                if (self.xram_write_count <= 50) {
+                if (self.xram_write_count <= 500) {
                     std.debug.print("XRAM WRITE #{d} addr={X:0>3} val={X:0>2} xbnk={d}\n", .{ self.xram_write_count, addr, val, self.sfr_raw[SFR_XBNK] & 0x03 });
-                } else if (self.xram_write_count == 51) {
+                } else if (self.xram_write_count == 501) {
                     std.debug.print("... (further XRAM writes suppressed)\n", .{});
                 }
                 self.storeXram(@as(u7, @truncate(addr - 0x180)), val);
@@ -315,16 +325,22 @@ pub const Cpu = struct {
         self.base_timer_acc += cycles_used;
         while (self.base_timer_acc >= CYCLES_PER_FBST_TICK) {
             self.base_timer_acc -= CYCLES_PER_FBST_TICK;
+            const old_counter = self.base_timer_counter;
             self.base_timer_counter = (self.base_timer_counter + 1) & 0x3FFF; // 14-bit
+            const new_counter = self.base_timer_counter;
 
-            // BT0 : overflow du compteur 14-bit (16384 ticks = ~0.5s)
-            if (self.base_timer_counter == 0) {
+            // BT0 : configurable rate based on BTCR7
+            // BTCR7=0: interrupt every 16384 ticks
+            // BTCR7=1: interrupt every 64 ticks
+            const int0_rate: u16 = if (btcr & BTCR_BT0_CYCLE != 0) 0x0040 else 0x4000;
+            if (old_counter / int0_rate < new_counter / int0_rate or new_counter == 0) {
                 self.sfr_raw[SFR_BTCR] |= BTCR_BT0_FLAG;
+                std.debug.print("BT0_FLAG set: counter {d}->{d} rate={d} BT0_IE={} EA={}\n", .{ old_counter, new_counter, int0_rate, (btcr & BTCR_BT0_IE != 0), (self.sfr_raw[SFR_IE] & 0x80 != 0) });
             }
 
             // BT1 : seuil configurable selon BTCR5:BTCR4
             const bt1_idx: u2 = @truncate((btcr & (BTCR_BT1_CYCLE_HI | BTCR_BT1_CYCLE_LO)) >> 4);
-            if (self.base_timer_counter == BT1_THRESHOLDS[bt1_idx]) {
+            if (new_counter == BT1_THRESHOLDS[bt1_idx]) {
                 self.sfr_raw[SFR_BTCR] |= BTCR_BT1_FLAG;
             }
         }
@@ -445,6 +461,10 @@ pub const Cpu = struct {
     const SFR_T0HR: u7 = 0x15; //  reload high
     const SFR_T0CNT: u7 = 0x10; //  contrôle, flags et enables (adresse hardware 0x110)
     const SFR_PCON: u7 = 0x07; // Power control (bit 0 = HALT mode)
+    const SFR_VSEL: u7 = 0x63; // Control register (INCE=bit4, ASEL=bit0)
+    const SFR_VRMAD1: u7 = 0x64; // Work RAM address low byte
+    const SFR_VRMAD2: u7 = 0x65; // Work RAM address high (VRMAD8=bit0 = bank)
+    const SFR_VTRBF: u7 = 0x66; // Work RAM data access (read/write via VRMAD)
     const SFR_XBNK: u7 = 0x25; // Sélection banque XRAM (LCD)
     const SFR_P1: u7 = 0x44; // Port 1 (série + PWM audio)
     const SFR_P1DDR: u7 = 0x45; // Port 1 data direction
@@ -455,6 +475,7 @@ pub const Cpu = struct {
     const SFR_P7: u7 = 0x5C; // Port 7 (détection tension, read-only)
     const SFR_I23CR: u7 = 0x5E; // sélection front externe INT2/INT3
     const SFR_ISL: u7 = 0x5F; //  sélection entrée externe et horloge
+    const SFR_VCCR: u7 = 0x27; // LCD contrast/power control
 
     // Octet qui compose T0CNT
     const T0CNT_T0HRUN: u8 = 0x80;
@@ -526,6 +547,14 @@ pub const Cpu = struct {
             SFR_T1L => self.t1l_counter,
             SFR_T1H => self.t1h_counter,
             SFR_P3 => self.p3_buttons, // lecture physique des boutons (active-low)
+            SFR_VTRBF => {
+                const addr = self.vrmad & 0x1FF;
+                const data = if (addr < 512) self.work_ram[addr] else 0xFF;
+                if (self.sfr_raw[SFR_VSEL] & 0x10 != 0) {
+                    self.vrmad +%= 1;
+                }
+                return data;
+            },
             else => self.sfr_raw[offset],
         };
     }
@@ -579,6 +608,24 @@ pub const Cpu = struct {
             0x22 => { // STAD (Display start address)
                 std.debug.print("STAD write val={X:0>2}\n", .{val});
             },
+            SFR_VSEL => { // VSEL: bits read/write (reset defaults: 0xFC)
+                self.sfr_raw[SFR_VSEL] = val;
+            },
+            SFR_VRMAD1 => {
+                self.vrmad = (self.vrmad & 0x100) | @as(u16, val);
+            },
+            SFR_VRMAD2 => {
+                self.vrmad = (self.vrmad & 0xFF) | (@as(u16, val & 0x01) << 8);
+            },
+            SFR_VTRBF => {
+                const addr = self.vrmad & 0x1FF;
+                if (addr < 512) {
+                    self.work_ram[addr] = val;
+                }
+                if (self.sfr_raw[SFR_VSEL] & 0x10 != 0) {
+                    self.vrmad +%= 1;
+                }
+            },
             SFR_BTCR => {
                 if (val & BTCR_BT_RUN == 0) {
                     self.base_timer_counter = 0;
@@ -617,8 +664,8 @@ pub const Cpu = struct {
     pub fn loadXram(self: *Cpu, offset: u7) u8 {
         const xbnk = self.sfr_raw[SFR_XBNK] & 0x03;
         return switch (xbnk) {
-            0 => if (offset < 96) self.xram_banks.bank0[offset] else 0xFF,
-            1 => if (offset < 96) self.xram_banks.bank1[offset] else 0xFF,
+            0 => if ((offset & 0x0F) < 0x0C) self.xram_banks.bank0[offset] else 0xFF,
+            1 => if ((offset & 0x0F) < 0x0C) self.xram_banks.bank1[offset] else 0xFF,
             2 => if (offset < 6) self.xram_banks.bank2[offset] else 0xFF,
             else => 0xFF,
         };
@@ -628,10 +675,10 @@ pub const Cpu = struct {
         const xbnk = self.sfr_raw[SFR_XBNK] & 0x03;
         switch (xbnk) {
             0 => {
-                if (offset < 96) self.xram_banks.bank0[offset] = val;
+                if ((offset & 0x0F) < 0x0C) self.xram_banks.bank0[offset] = val;
             },
             1 => {
-                if (offset < 96) self.xram_banks.bank1[offset] = val;
+                if ((offset & 0x0F) < 0x0C) self.xram_banks.bank1[offset] = val;
             },
             2 => {
                 if (offset < 6) self.xram_banks.bank2[offset] = val;
