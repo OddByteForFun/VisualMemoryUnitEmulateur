@@ -63,6 +63,7 @@ pub const Cpu = struct {
 
     // Ports I/O
     p3_buttons: u8 = 0xFF, // état physique des boutons (active-low, 1=relâché)
+    prev_p3_buttons: u8 = 0xFF, // état précédent pour détection de front (edge mode)
 
     // diagnostic
     xram_write_count: u32 = 0,
@@ -367,14 +368,30 @@ pub const Cpu = struct {
     };
 
     pub fn requestLevelDrivenInterrupts(self: *Cpu) void {
-        // P3 continuous mode: set Source flag while any button is pressed
         var p3int = self.sfr_raw[SFR_P3INT];
-        if (p3int & P3INT_P30INT != 0 and p3int & P3INT_P32INT != 0) {
+        const p30int = p3int & P3INT_P30INT != 0; // interrupt P3 enable
+        const p32int = p3int & P3INT_P32INT != 0; // 1=continuous, 0=edge
+
+        if (!p30int) return;
+
+        if (p32int) {
+            // Mode continuous: source flag tant qu'un bouton est pressé
             if (self.p3_buttons != 0xFF) {
+                p3int |= P3INT_P31INT;
+            } else {
+                p3int &= ~P3INT_P31INT;
+            }
+            self.sfr_raw[SFR_P3INT] = p3int;
+        } else {
+            // Mode edge: source flag sur front descendant (1→0 sur un bit P3)
+            const falling = self.prev_p3_buttons & ~self.p3_buttons;
+            if (falling != 0) {
                 p3int |= P3INT_P31INT;
                 self.sfr_raw[SFR_P3INT] = p3int;
             }
         }
+
+        self.prev_p3_buttons = self.p3_buttons;
     }
 
     pub fn servicePendingInterrupt(self: *Cpu) void {
@@ -449,6 +466,14 @@ pub const Cpu = struct {
             },
             .p3 => {}, // P31INT source flag stays set until cleared by ISR
         };
+
+        std.debug.print("IRQ: {s} vec={X:0>4} PC={X:0>4}->{X:0>4} P3={X:0>2}\n", .{
+            @tagName(val.?),
+            vecteur,
+            return_addr,
+            self.pc,
+            self.p3_buttons,
+        });
     }
 
     // il s'agit de définir les offsets utilisés par load8 qui ajoute 0x100 à ces valeurs.
@@ -556,7 +581,9 @@ pub const Cpu = struct {
             SFR_T0H => self.t0h_counter,
             SFR_T1L => self.t1l_counter,
             SFR_T1H => self.t1h_counter,
-            SFR_P3 => self.p3_buttons, // lecture physique des boutons (active-low)
+            SFR_P3 => {
+                return self.p3_buttons;
+            },
             SFR_VTRBF => {
                 const addr = self.vrmad & 0x1FF;
                 const data = if (addr < 512) self.work_ram[addr] else 0xFF;

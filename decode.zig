@@ -257,11 +257,23 @@ fn cycles(dec: DecodeResult) u8 {
 
 pub fn step(cpu: *Cpu) u8 {
     if (cpu.halted) {
+        const old_p3 = cpu.p3_buttons;
         cpu.tickTimers(1);
         cpu.requestLevelDrivenInterrupts();
         cpu.servicePendingInterrupt();
-        if (dbg.halt_sample == 0) {
-            dbg.log("HALT PC={X:0>4} IE={X:0>2} BTCR={X:0>2} T0CNT={X:0>2} T1CNT={X:0>2} P3INT={X:0>2} BTcnt={d} BTacc={d}", .{ cpu.pc, cpu.sfr_raw[0x08], cpu.sfr_raw[0x7F], cpu.sfr_raw[0x10], cpu.sfr_raw[0x18], cpu.sfr_raw[0x4E], cpu.base_timer_counter, cpu.base_timer_acc });
+
+        if (cpu.p3_buttons != old_p3 or dbg.halt_sample == 0) {
+            const p3int = cpu.sfr_raw[0x4E];
+            dbg.log("HALT PC={X:0>4} P3={X:0>2}->{X:0>2} P3INT={X:0>2} IE={X:0>2} depth={d} blocked={d} halted={}", .{
+                cpu.pc,
+                old_p3,
+                cpu.p3_buttons,
+                p3int,
+                cpu.sfr_raw[0x08],
+                cpu.interrupt_depth,
+                cpu.interrupt_blocked,
+                cpu.halted,
+            });
         }
         dbg.halt_sample +%= 1;
         if (dbg.halt_sample >= 10000) dbg.halt_sample = 0;
@@ -378,6 +390,9 @@ pub fn step(cpu: *Cpu) u8 {
         .ld => {
             const addr = readEA(cpu, dec);
             cpu.a = cpu.load8(addr);
+            if (addr == 0x14C and cpu.p3_buttons != 0xFF) {
+                dbg.log("LD P3 -> {X:0>2} (PC={X:0>4})", .{ cpu.p3_buttons, cpu.pc - 2 });
+            }
         },
         .ld_ri => {
             const addr = readIndirectAddr(cpu, @as(u2, @intCast(dec.ri.?)));
@@ -602,13 +617,15 @@ pub fn step(cpu: *Cpu) u8 {
     cpu.servicePendingInterrupt();
 
     if (cpu.halted and dec.inst != .nop) {
-        dbg.log(">>> HALT at PC={X:0>4} IE={X:0>2} BTCR={X:0>2} T0CNT={X:0>2} T1CNT={X:0>2} P3INT={X:0>2}", .{
+        dbg.log(">>> HALT at PC={X:0>4} IE={X:0>2} BTCR={X:0>2} T0CNT={X:0>2} T1CNT={X:0>2} P3INT={X:0>2} P3={X:0>2} prevP3={X:0>2}", .{
             cpu.pc,
             cpu.sfr_raw[0x08],
             cpu.sfr_raw[0x7F],
             cpu.sfr_raw[0x10],
             cpu.sfr_raw[0x18],
             cpu.sfr_raw[0x4E],
+            cpu.p3_buttons,
+            cpu.prev_p3_buttons,
         });
     }
 
