@@ -366,6 +366,17 @@ pub const Cpu = struct {
         p3, // Port 3 level interrupt (buttons)
     };
 
+    pub fn requestLevelDrivenInterrupts(self: *Cpu) void {
+        // P3 continuous mode: set Source flag while any button is pressed
+        var p3int = self.sfr_raw[SFR_P3INT];
+        if (p3int & P3INT_P30INT != 0 and p3int & P3INT_P32INT != 0) {
+            if (self.p3_buttons != 0xFF) {
+                p3int |= P3INT_P31INT;
+                self.sfr_raw[SFR_P3INT] = p3int;
+            }
+        }
+    }
+
     pub fn servicePendingInterrupt(self: *Cpu) void {
         var val: ?Interruptions = null;
 
@@ -402,14 +413,13 @@ pub const Cpu = struct {
         }
 
         // Port 3 interrupt (priority 10, vector 0x004BH)
-        // Level interrupt: fires continuously while any P3 pin is LOW (button pressed)
+        // Continuous mode (P32INT=1): Source flag set while any P3 pin is LOW (button pressed)
+        // Edge mode (P32INT=0): Source flag set on falling edge (handled in P3 setter)
+        // Interrupt fires when Enable (P30INT) AND Source (P31INT) are both set
         if (val == null) {
             const p3int = self.sfr_raw[SFR_P3INT];
-            if (p3int & P3INT_P32INT != 0 and p3int & P3INT_P30INT != 0) {
-                if (self.p3_buttons != 0xFF) {
-                    val = .p3;
-                    self.sfr_raw[SFR_P3INT] |= P3INT_P31INT;
-                }
+            if (p3int & P3INT_P30INT != 0 and p3int & P3INT_P31INT != 0) {
+                val = .p3;
             }
         }
 

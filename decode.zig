@@ -258,6 +258,7 @@ fn cycles(dec: DecodeResult) u8 {
 pub fn step(cpu: *Cpu) u8 {
     if (cpu.halted) {
         cpu.tickTimers(1);
+        cpu.requestLevelDrivenInterrupts();
         cpu.servicePendingInterrupt();
         if (dbg.halt_sample == 0) {
             dbg.log("HALT PC={X:0>4} IE={X:0>2} BTCR={X:0>2} T0CNT={X:0>2} T1CNT={X:0>2} P3INT={X:0>2} BTcnt={d} BTacc={d}", .{ cpu.pc, cpu.sfr_raw[0x08], cpu.sfr_raw[0x7F], cpu.sfr_raw[0x10], cpu.sfr_raw[0x18], cpu.sfr_raw[0x4E], cpu.base_timer_counter, cpu.base_timer_acc });
@@ -597,6 +598,7 @@ pub fn step(cpu: *Cpu) u8 {
     }
     const used = cycles(dec);
     cpu.tickTimers(used);
+    cpu.requestLevelDrivenInterrupts();
     cpu.servicePendingInterrupt();
 
     if (cpu.halted and dec.inst != .nop) {

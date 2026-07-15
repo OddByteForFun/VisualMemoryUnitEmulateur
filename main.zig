@@ -125,12 +125,15 @@ fn getXramByte(cpu: *Cpu, row: u32, byte_col: u32) u8 {
 
 fn updateButtons(cpu: *Cpu) void {
     var buttons: u8 = 0xFF;
-    if (rl.isKeyDown(.right)) buttons &= ~@as(u8, 0x01);
-    if (rl.isKeyDown(.left)) buttons &= ~@as(u8, 0x02);
-    if (rl.isKeyDown(.down)) buttons &= ~@as(u8, 0x04);
-    if (rl.isKeyDown(.up)) buttons &= ~@as(u8, 0x08);
-    if (rl.isKeyDown(.z)) buttons &= ~@as(u8, 0x40);
-    if (rl.isKeyDown(.x)) buttons &= ~@as(u8, 0x80);
+    if (rl.isKeyDown(.up)) buttons &= ~@as(u8, 0x01); // P3.0 = Up
+    if (rl.isKeyDown(.down)) buttons &= ~@as(u8, 0x02); // P3.1 = Down
+    if (rl.isKeyDown(.left)) buttons &= ~@as(u8, 0x04); // P3.2 = Left
+    if (rl.isKeyDown(.right)) buttons &= ~@as(u8, 0x08); // P3.3 = Right
+    if (rl.isKeyDown(.z)) buttons &= ~@as(u8, 0x10); // P3.4 = A
+    if (rl.isKeyDown(.x)) buttons &= ~@as(u8, 0x20); // P3.5 = B
+    if (buttons != 0xFF) {
+        std.debug.print("BUTTONS: {X:0>2}\n", .{buttons});
+    }
     cpu.p3_buttons = buttons;
 }
 
