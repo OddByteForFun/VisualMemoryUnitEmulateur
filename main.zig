@@ -41,7 +41,7 @@ pub fn main(init: std.process.Init) !void {
     cpu.reset();
 
     dbg.init();
-    dbg.log_level = .trace;
+    dbg.log_level = .info;
     dbg.enableFileLog();
     dbg.log("=== VMU Emulator Start === ROM: {s} ({d} bytes)", .{ rom_path, n });
 
@@ -57,6 +57,8 @@ pub fn main(init: std.process.Init) !void {
     var prev_pc: u16 = 0;
     var stuck_count: u32 = 0;
 
+    var prev_halted = false;
+
     while (!rl.windowShouldClose()) {
         // Flush log file periodically (every 60 frames ~ 1s) — BEFORE updateButtons
         // so that new BUTTONS entries always have room in the buffer
@@ -65,6 +67,11 @@ pub fn main(init: std.process.Init) !void {
             dbg.clearLogData();
         }
 
+        if (frames % 60 == 0) {
+            if (dbg.loop_detected_pc) |lp| {
+                dbg.log("LOOP DETECTED at PC={X:0>4} count={d}", .{ lp, dbg.loop_count });
+            }
+        }
         // Poll input events BEFORE reading key state, so isKeyDown reflects current frame
         rl.pollInputEvents();
         updateButtons(&cpu);
@@ -86,6 +93,10 @@ pub fn main(init: std.process.Init) !void {
             std.debug.print("KEY PRESSED: code={d} ({s})\n", .{ @intFromEnum(key), @tagName(key) });
         }
 
+        if (cpu.halted != prev_halted) {
+            dbg.log("HALTED CHANGED: {} -> {} PC={X:0>4}", .{ prev_halted, cpu.halted, cpu.pc });
+            prev_halted = cpu.halted;
+        }
         const cycles_per_frame: u64 = 100_000;
         var i: u64 = 0;
         while (i < cycles_per_frame) : (i += 1) {

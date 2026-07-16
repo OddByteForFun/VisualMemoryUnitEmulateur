@@ -90,7 +90,7 @@ pub const Cpu = struct {
         cpu.sfr_raw[SFR_IE] = 0x80; // 108H: Master interrupt enable (EA=1)
         cpu.sfr_raw[SFR_SP] = 0x7F; // 106H: Stack pointer
         cpu.sfr_raw[SFR_P1FCR] = 0xBF; // 146H: Port 1 function control
-        cpu.sfr_raw[SFR_P3INT] = 0xFD; // 14EH: Port 3 interrupt
+        cpu.sfr_raw[SFR_P3INT] = 0x00; // 0xFD; // 14EH: Port 3 interrupt
         cpu.sfr_raw[SFR_ISL] = 0xC0; // 15FH: Input signal select
         cpu.sfr_raw[SFR_BTCR] = 0x41; // 17FH: Base timer control (BT0_CYCLE + BT0_IE)
         cpu.sfr_raw[SFR_VCCR] = 0x80; // 127H: LCD display control (VCCR7=1)
@@ -125,7 +125,7 @@ pub const Cpu = struct {
         self.sfr_raw[SFR_IE] = 0x80; // 108H: Master interrupt enable (EA=1)
         self.sfr_raw[SFR_SP] = 0x7F; // 106H: Stack pointer
         self.sfr_raw[SFR_P1FCR] = 0xBF; // 146H: Port 1 function control
-        self.sfr_raw[SFR_P3INT] = 0xFD; // 14EH: Port 3 interrupt
+        self.sfr_raw[SFR_P3INT] = 0x00; // 14EH: Port 3 interrupt
         self.sfr_raw[SFR_ISL] = 0xC0; // 15FH: Input signal select
         self.sfr_raw[SFR_BTCR] = 0x41; // 17FH: Base timer control (BT0_CYCLE + BT0_IE)
         self.sfr_raw[SFR_VCCR] = 0x80; // 127H: LCD display control (VCCR7=1)
@@ -582,6 +582,9 @@ pub const Cpu = struct {
             SFR_T1L => self.t1l_counter,
             SFR_T1H => self.t1h_counter,
             SFR_P3 => {
+                if (self.p3_buttons != 0xff) {
+                    std.debug.print("READ P3 -> {X:0>2} PC={X:0>4}\n", .{ self.p3_buttons, self.pc });
+                }
                 return self.p3_buttons;
             },
             SFR_VTRBF => {
@@ -598,6 +601,9 @@ pub const Cpu = struct {
 
     pub fn storeSFR(self: *Cpu, offset: u7, val: u8) void {
         self.sfr_raw[offset] = val;
+        if (offset == SFR_PCON) {
+            std.debug.print("WRITE PCON: -> {X:0>2} PC={X:0>4} (HALT bit={d})\n", .{ val, self.pc, val & 1 });
+        }
         switch (offset) {
             SFR_ACC => self.a = val,
             SFR_B => self.b = val,
@@ -607,6 +613,9 @@ pub const Cpu = struct {
             SFR_PSW => self.psw = @bitCast(val),
             SFR_SP => self.sp = val,
             SFR_IE, SFR_IP => {
+                //if (offset == SFR_IE) {
+                //    std.debug.print("WRITE IE: {X:0>2} -> {X:0>2} PC={X:0>4}\n", .{ self.sfr_raw[SFR_IE], val, self.pc });
+                //}
                 self.interrupt_blocked = 1;
             },
             SFR_T0LR => {
