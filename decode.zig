@@ -262,6 +262,16 @@ pub fn step(cpu: *Cpu) u8 {
         cpu.requestLevelDrivenInterrupts();
         cpu.servicePendingInterrupt();
 
+        // Hardware behavior: ANY change on P3 pins wakes the CPU from HALT,
+        // regardless of P3INT configuration. P3INT only controls whether
+        // an interrupt is generated (or if the interrupt fires after wake).
+        if (cpu.halted and cpu.p3_buttons != old_p3) {
+            dbg.log("P3 WAKEUP: P3={X:0>2}->{X:0>2} PC={X:0>4} P3INT={X:0>2}", .{
+                old_p3, cpu.p3_buttons, cpu.pc, cpu.sfr_raw[0x4E],
+            });
+            cpu.halted = false;
+        }
+
         if (cpu.p3_buttons != old_p3 or dbg.halt_sample == 0) {
             const p3int = cpu.sfr_raw[0x4E];
             dbg.log("HALT PC={X:0>4} P3={X:0>2}->{X:0>2} P3INT={X:0>2} IE={X:0>2} depth={d} blocked={d} halted={}", .{

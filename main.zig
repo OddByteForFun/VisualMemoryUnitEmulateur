@@ -13,6 +13,7 @@ const FG = rl.Color.init(20, 20, 20, 255);
 const BG = rl.Color.init(190, 210, 180, 255);
 
 var azerty_mode: bool = false;
+var trace_mode: bool = false;
 
 pub fn main(init: std.process.Init) !void {
     var arg_iter = try std.process.Args.Iterator.initAllocator(init.minimal.args, init.arena.allocator());
@@ -20,12 +21,13 @@ pub fn main(init: std.process.Init) !void {
     _ = arg_iter.skip();
 
     const rom_path = arg_iter.next() orelse {
-        std.debug.print("Usage: lc86K <rom.bin> [--azerty]\n", .{});
+        std.debug.print("Usage: lc86K <rom.bin> [--azerty] [--trace]\n", .{});
         return;
     };
 
     while (arg_iter.next()) |arg| {
         if (std.mem.eql(u8, arg, "--azerty")) azerty_mode = true;
+        if (std.mem.eql(u8, arg, "--trace")) trace_mode = true;
     }
 
     const dir = std.Io.Dir.cwd();
@@ -41,7 +43,7 @@ pub fn main(init: std.process.Init) !void {
     cpu.reset();
 
     dbg.init();
-    dbg.log_level = .info;
+    dbg.log_level = if (trace_mode) .trace else .info;
     dbg.enableFileLog();
     dbg.log("=== VMU Emulator Start === ROM: {s} ({d} bytes)", .{ rom_path, n });
 
@@ -68,6 +70,11 @@ pub fn main(init: std.process.Init) !void {
         }
 
         if (frames % 60 == 0) {
+            dbg.log("HALTED STATUS: halted={} PC={X:0>4} cyc={d} p3_reads={d} p3={X:0>2} P3INT={X:0>2} IE={X:0>2} depth={d} blk={d}", .{
+                cpu.halted, cpu.pc, cycles, cpu.p3_read_count, cpu.p3_buttons,
+                cpu.sfr_raw[0x4E], cpu.sfr_raw[0x08], cpu.interrupt_depth, cpu.interrupt_blocked,
+            });
+            cpu.p3_read_count = 0;
             if (dbg.loop_detected_pc) |lp| {
                 dbg.log("LOOP DETECTED at PC={X:0>4} count={d}", .{ lp, dbg.loop_count });
             }
@@ -93,29 +100,36 @@ pub fn main(init: std.process.Init) !void {
             std.debug.print("KEY PRESSED: code={d} ({s})\n", .{ @intFromEnum(key), @tagName(key) });
         }
 
-        if (cpu.halted != prev_halted) {
-            dbg.log("HALTED CHANGED: {} -> {} PC={X:0>4}", .{ prev_halted, cpu.halted, cpu.pc });
-            prev_halted = cpu.halted;
-        }
         const cycles_per_frame: u64 = 100_000;
         var i: u64 = 0;
         while (i < cycles_per_frame) : (i += 1) {
             _ = step(&cpu);
             cycles += 1;
-        }
 
-        if (!cpu.halted) {
+            if (cpu.halted != prev_halted) {
+                dbg.log("HALTED CHANGED: {} -> {} PC={X:0>4}", .{ prev_halted, cpu.halted, cpu.pc });
+                prev_halted = cpu.halted;
+            }
+
+            if (cpu.halted) {
+                stuck_count = 0;
+                break;
+            }
+
             if (cpu.pc == prev_pc) {
                 stuck_count += 1;
+                if (stuck_count == 300) {
+                    dbg.log("STUCK at PC={X:0>4}", .{cpu.pc});
+                    var j: u16 = 0;
+                    while (j < 16) : (j += 1) {
+                        const addr = cpu.pc +% j;
+                        dbg.log("  ROM[{X:0>4}] = {X:0>2}", .{ addr, cpu.inst_bank.data[addr] });
+                    }
+                }
             } else {
                 stuck_count = 0;
                 prev_pc = cpu.pc;
             }
-            if (stuck_count == 300) {
-                dbg.log("STUCK at PC={X:0>4}", .{cpu.pc});
-            }
-        } else {
-            stuck_count = 0;
         }
 
         rl.beginDrawing();

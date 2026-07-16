@@ -17,6 +17,7 @@ pub const Cpu = struct {
         data: []u8,
         bank_id: enum { rom, flash0, flash1 },
     },
+    rom_data: []u8, // sauvegarde du slice ROM pour pouvoir revenir depuis Flash
 
     // RAM space (512 octets, accédé par load/store)
     ram_bank0: [256]u8, // bank 0 : système + stack
@@ -67,6 +68,7 @@ pub const Cpu = struct {
 
     // diagnostic
     xram_write_count: u32 = 0,
+    p3_read_count: u32 = 0,
 
     pub fn init(rom: []u8) Cpu {
         var cpu = Cpu{
@@ -74,6 +76,7 @@ pub const Cpu = struct {
                 .data = rom,
                 .bank_id = .rom,
             },
+            .rom_data = rom,
             .ram_bank0 = .{0} ** 256,
             .ram_bank1 = .{0} ** 256,
             .sfr_raw = .{0} ** 0x80,
@@ -568,6 +571,8 @@ pub const Cpu = struct {
     const IP_SIO0: u8 = 0x40; // IE bit 6
     const IP_SIO1: u8 = 0x80; // IE bit 7
 
+    const SFR_EXT: u7 = 0x0D;
+
     pub fn loadSFR(self: *Cpu, offset: u7) u8 {
         return switch (offset) {
             SFR_ACC => self.a,
@@ -582,9 +587,7 @@ pub const Cpu = struct {
             SFR_T1L => self.t1l_counter,
             SFR_T1H => self.t1h_counter,
             SFR_P3 => {
-                if (self.p3_buttons != 0xff) {
-                    std.debug.print("READ P3 -> {X:0>2} PC={X:0>4}\n", .{ self.p3_buttons, self.pc });
-                }
+                self.p3_read_count += 1;
                 return self.p3_buttons;
             },
             SFR_VTRBF => {
@@ -613,9 +616,6 @@ pub const Cpu = struct {
             SFR_PSW => self.psw = @bitCast(val),
             SFR_SP => self.sp = val,
             SFR_IE, SFR_IP => {
-                //if (offset == SFR_IE) {
-                //    std.debug.print("WRITE IE: {X:0>2} -> {X:0>2} PC={X:0>4}\n", .{ self.sfr_raw[SFR_IE], val, self.pc });
-                //}
                 self.interrupt_blocked = 1;
             },
             SFR_T0LR => {
@@ -633,9 +633,13 @@ pub const Cpu = struct {
                 }
             },
             SFR_PCON => {
+                std.debug.print("SFR_PCON write val={X:0>2} bit0={d} PC={X:0>4} halted_before={}\n", .{ val, val & 0x01, self.pc, self.halted });
                 if (val & 0x01 != 0) {
                     self.halted = true;
                 }
+            },
+            SFR_P3INT => {
+                std.debug.print("WRITE P3INT: {X:0>2} -> {X:0>2} PC={X:0>4} (P30INT={} P31INT={} P32INT={})\n", .{ self.sfr_raw[offset], val, self.pc, val & P3INT_P30INT != 0, val & P3INT_P31INT != 0, val & P3INT_P32INT != 0 });
             },
             SFR_T0CNT => {
                 if (val & T0CNT_T0LRUN == 0) {
@@ -700,6 +704,21 @@ pub const Cpu = struct {
                 // Si T1HRUN passe à 0 → reload T1H depuis T1HR
                 if (val & T1CNT_T1HRUN == 0) {
                     self.t1h_counter = self.sfr_raw[SFR_T1H];
+                }
+            },
+            SFR_EXT => {
+                // bit 0 : ROM vs Flash, bit 1 : sélection bank Flash (0=bank0, 1=bank1)
+                if (val & 0x01 != 0) {
+                    if (val & 0x02 != 0) {
+                        self.inst_bank.data = self.flash[65536..131072];
+                        self.inst_bank.bank_id = .flash1;
+                    } else {
+                        self.inst_bank.data = self.flash[0..65536];
+                        self.inst_bank.bank_id = .flash0;
+                    }
+                } else {
+                    self.inst_bank.data = self.rom_data;
+                    self.inst_bank.bank_id = .rom;
                 }
             },
 
