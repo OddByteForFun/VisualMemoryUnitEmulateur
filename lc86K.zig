@@ -11,6 +11,9 @@ pub const Psw = packed struct(u8) {
     cy: bool = false, // bit 7 — Carry (unsigned overflow)
 };
 
+var int3_dumped: bool = false;
+var trampoline_dumped: bool = false;
+
 pub const Cpu = struct {
     // Banque d'instructions (64KB, 3 banks : ROM / Flash0 / Flash1)
     inst_bank: struct {
@@ -116,7 +119,6 @@ pub const Cpu = struct {
         @memset(&self.xram_banks.bank1, 0);
         @memset(&self.xram_banks.bank2, 0);
         @memset(&self.work_ram, 0);
-        @memset(&self.flash, 0);
         self.t0l_counter = 0;
         self.t0h_counter = 0;
         self.t0_prescaler_acc = 0;
@@ -460,6 +462,51 @@ pub const Cpu = struct {
         self.pc = vecteur;
         self.interrupt_depth = 1;
         self.halted = false;
+
+        if (val == .int3) {
+            var once_printed = struct {
+                var done: bool = false;
+            }.done;
+            if (!once_printed) {
+                std.debug.print("=== INT3 ISR bytes at 0x001B ===\n", .{});
+                var i: usize = 0;
+                while (i < 32) : (i += 1) {
+                    std.debug.print("{X:0>2} ", .{self.inst_bank.data[0x1B + i]});
+                }
+                std.debug.print("\n", .{});
+                once_printed = true;
+            }
+        }
+
+        if (val == .int3 and !int3_dumped) {
+            int3_dumped = true;
+            std.debug.print("=== INT3 ISR bytes at 0x001B ===\n", .{});
+            var i: usize = 0;
+            while (i < 32) : (i += 1) {
+                std.debug.print("{X:0>2} ", .{self.inst_bank.data[0x1B + i]});
+            }
+            std.debug.print("\n", .{});
+        }
+
+        if (val == .int3 and !trampoline_dumped) {
+            trampoline_dumped = true;
+            std.debug.print("=== Trampoline bytes at 0x0130 (current bank={s}) ===\n", .{@tagName(self.inst_bank.bank_id)});
+            var i: usize = 0;
+            while (i < 16) : (i += 1) {
+                std.debug.print("{X:0>2} ", .{self.inst_bank.data[0x130 + i]});
+            }
+            std.debug.print("\n=== Same range in rom_data ===\n", .{});
+            i = 0;
+            while (i < 16) : (i += 1) {
+                std.debug.print("{X:0>2} ", .{self.rom_data[0x130 + i]});
+            }
+            std.debug.print("\n=== Same range in flash[0x130..] (bank0) ===\n", .{});
+            i = 0;
+            while (i < 16) : (i += 1) {
+                std.debug.print("{X:0>2} ", .{self.flash[0x130 + i]});
+            }
+            std.debug.print("\n", .{});
+        }
 
         if (val) |irq| switch (irq) {
             .int2 => self.sfr_raw[SFR_T0CNT] &= ~T0CNT_T0LOVF,

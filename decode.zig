@@ -595,6 +595,7 @@ pub fn step(cpu: *Cpu) u8 {
             const lo = cpu.ram_bank0[cpu.sp];
             cpu.sp -%= 1;
             cpu.pc = (@as(u16, hi) << 8) | @as(u16, lo);
+            std.debug.print("RETI -> PC={X:0>4} depth_before={d}\n", .{ cpu.pc, cpu.interrupt_depth });
             cpu.interrupt_depth = 0;
         },
         .dbnz_d9, .dbnz_ri => {
