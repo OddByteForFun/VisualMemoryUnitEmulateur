@@ -20,35 +20,100 @@ pub fn main(init: std.process.Init) !void {
     defer arg_iter.deinit();
     _ = arg_iter.skip();
 
-    const rom_path = arg_iter.next() orelse {
-        std.debug.print("Usage: lc86K <rom.bin> [--azerty] [--trace]\n", .{});
+    var path_a: ?[]const u8 = null;
+    var path_b: ?[]const u8 = null;
+
+    while (arg_iter.next()) |arg| {
+        if (std.mem.eql(u8, arg, "--azerty")) {
+            azerty_mode = true;
+        } else if (std.mem.eql(u8, arg, "--trace")) {
+            trace_mode = true;
+        } else if (path_a == null) {
+            path_a = arg;
+        } else if (path_b == null) {
+            path_b = arg;
+        }
+    }
+
+    _ = path_a orelse {
+        std.debug.print("Usage: lc86K [<bios.bin>] <game.vms> [--azerty] [--trace]\n", .{});
         return;
     };
 
-    while (arg_iter.next()) |arg| {
-        if (std.mem.eql(u8, arg, "--azerty")) azerty_mode = true;
-        if (std.mem.eql(u8, arg, "--trace")) trace_mode = true;
-    }
+    // 2 files: first=BIOS, second=game | 1 file: game only, BIOS auto-detected
+    const bios_path: []const u8 = if (path_b != null) path_a.? else "roms/vmu_bios_jp.bin";
+    const game_path: []const u8 = if (path_b) |b| b else path_a.?;
 
     const dir = std.Io.Dir.cwd();
-    const file = try dir.openFile(init.io, rom_path, .{});
-    defer file.close(init.io);
+
+    // Load BIOS into ROM (64KB padded)
+    const bios_file = try dir.openFile(init.io, bios_path, .{});
+    defer bios_file.close(init.io);
 
     const rom = init.arena.allocator().alloc(u8, 65536) catch unreachable;
     @memset(rom, 0);
-    const n = try file.readPositionalAll(init.io, rom[0..65536], 0);
-    std.debug.print("ROM: {d} bytes\n", .{n});
+    const bios_size = try bios_file.readPositionalAll(init.io, rom[0..65536], 0);
+    std.debug.print("BIOS: {s} ({d} bytes)\n", .{ bios_path, bios_size });
 
     var cpu = Cpu.init(rom);
-    const copy_len: usize = @min(@as(usize, n), 65536);
-    @memcpy(cpu.flash[0..@min(rom.len, 65536)], rom[0..@min(rom.len, 65536)]);
-    @memcpy(cpu.flash[65536..][0..copy_len], rom[0..copy_len]);
+
+    // Initialize a proper VMU flash filesystem (same approach as DreamPotato)
+    initVmuFlash(&cpu);
+
+    // Load game into flash block 0 (inside the filesystem)
+    const game_file = try dir.openFile(init.io, game_path, .{});
+    defer game_file.close(init.io);
+
+    const game_size = try game_file.readPositionalAll(init.io, cpu.flash[0..65536], 0);
+    std.debug.print("Game: {s} ({d} bytes)\n", .{ game_path, game_size });
+
+    // Create directory entry for the game at directory table (block 253, entry 0)
+    const dir_base = 253 * 512;
+    cpu.flash[dir_base + 0x00] = 0xCC; // FileType = Game
+    cpu.flash[dir_base + 0x01] = 0x80; // CopyProtection = not copy protected
+    cpu.flash[dir_base + 0x02] = 0x00; // StartFAT low = 0
+    cpu.flash[dir_base + 0x03] = 0x00; // StartFAT high = 0
+    // Filename: 12 bytes at offset 0x04 (padded with 0)
+    const game_name = "GAME";
+    for (game_name, 0..) |ch, idx| {
+        cpu.flash[dir_base + 0x04 + idx] = ch;
+    }
+    // SizeInBlocks at 0x18
+    const size_blocks: u16 = @intCast((game_size + 511) / 512);
+    cpu.flash[dir_base + 0x18] = @truncate(size_blocks);
+    cpu.flash[dir_base + 0x19] = @truncate(size_blocks >> 8);
+    // VmsHeaderBlockOffset at 0x1A (header is at block 1)
+    cpu.flash[dir_base + 0x1A] = 0x01;
+    cpu.flash[dir_base + 0x1B] = 0x00;
+
+    // Set up FAT chain for game blocks (block 0 → 1 → 2 → ... → FAT_LastInFile)
+    const fat_base: usize = 254 * 512;
+    const last_game_block: u16 = @intCast((game_size + 511) / 512 - 1);
+    {
+        var b: u16 = 0;
+        while (b <= last_game_block) : (b += 1) {
+            const fat_off: usize = fat_base + @as(usize, b) * 2;
+            if (b == last_game_block) {
+                cpu.flash[fat_off] = 0xFA; // FAT_LastInFile low
+                cpu.flash[fat_off + 1] = 0xFF; // FAT_LastInFile high
+            } else {
+                cpu.flash[fat_off] = @truncate(b + 1); // next block low
+                cpu.flash[fat_off + 1] = 0x00; // next block high
+            }
+        }
+    }
+
     cpu.reset();
+
+    // Initialize BIOS RTC (same as DreamPotato's InitializeRTCDate)
+    // The BIOS checks DateTime_DateSet (RAM 0xFF) to decide if date is ready.
+    // Without this, the BIOS waits forever for the Dreamcast to send the date.
+    initBiosRtc(&cpu);
 
     dbg.init();
     dbg.log_level = if (trace_mode) .trace else .info;
     dbg.enableFileLog();
-    dbg.log("=== VMU Emulator Start === ROM: {s} ({d} bytes)", .{ rom_path, n });
+    dbg.log("=== VMU Emulator Start === BIOS: {s} ({d} bytes) Game: {s} ({d} bytes)", .{ bios_path, bios_size, game_path, game_size });
 
     const win_w: i32 = LCD_W * SCALE;
     const win_h: i32 = LCD_H * SCALE + 24;
@@ -117,6 +182,25 @@ pub fn main(init: std.process.Init) !void {
 
             if (cpu.halted) {
                 stuck_count = 0;
+                // The base timer runs on a 32.768kHz quartz oscillator that keeps
+                // ticking even when the CPU is halted. Simulate the full frame's
+                // worth of timer ticks so the base timer can fire INT3 and wake
+                // the CPU from HALT.
+                const remaining: u32 = @intCast(cycles_per_frame - i);
+                var ticked: u32 = 0;
+                while (ticked < remaining) {
+                    const batch: u8 = @intCast(@min(remaining - ticked, 255));
+                    cpu.tickTimers(batch);
+                    ticked += batch;
+                    cpu.requestLevelDrivenInterrupts();
+                    cpu.servicePendingInterrupt();
+                    if (!cpu.halted) {
+                        dbg.log("WAKEUP from HALT by interrupt, PC={X:0>4}", .{cpu.pc});
+                        break;
+                    }
+                }
+                cycles += ticked;
+                i = cycles_per_frame;
                 break;
             }
 
@@ -147,6 +231,144 @@ pub fn main(init: std.process.Init) !void {
         rl.endDrawing();
         frames += 1;
     }
+}
+
+/// Initialize VMU flash with a proper filesystem (same layout as DreamPotato).
+/// Flash = 128KB = 256 blocks × 512 bytes.
+/// Blocks 0-199: user data, 200-240: hidden, 241-253: directory, 254: FAT, 255: root.
+fn initVmuFlash(cpu: *Cpu) void {
+    const flash = &cpu.flash;
+    // Erased flash is 0xFF
+    @memset(flash, 0xFF);
+
+    // --- Root block (block 255, offset 0x1FE00) ---
+    const rb: usize = 255 * 512;
+    // Magic 0x55 at 0x00-0x0F
+    for (0..16) |i| flash[rb + i] = 0x55;
+    // VolumeLast at 0x40
+    flash[rb + 0x40] = 0xFF;
+    flash[rb + 0x41] = 0xFF;
+    // Partition at 0x42
+    flash[rb + 0x42] = 0x00;
+    flash[rb + 0x43] = 0x00;
+    // Root at 0x44
+    flash[rb + 0x44] = 0xFF;
+    flash[rb + 0x45] = 0x00;
+    // FATFirst at 0x46
+    flash[rb + 0x46] = 0xFE;
+    flash[rb + 0x47] = 0x00;
+    // FATSize at 0x48
+    flash[rb + 0x48] = 0x01;
+    flash[rb + 0x49] = 0x00;
+    // DirLast at 0x4A
+    flash[rb + 0x4A] = 0xFD;
+    flash[rb + 0x4B] = 0x00;
+    // DirSize at 0x4C
+    flash[rb + 0x4C] = 0x0D;
+    flash[rb + 0x4D] = 0x00;
+    // Icon at 0x4E
+    flash[rb + 0x4E] = 0x00;
+    // Sort at 0x4F
+    flash[rb + 0x4F] = 0x00;
+    // HiddenFirst at 0x50
+    flash[rb + 0x50] = 0xC8;
+    flash[rb + 0x51] = 0x00;
+    // HiddenSize at 0x52
+    flash[rb + 0x52] = 0x29;
+    flash[rb + 0x53] = 0x00;
+    // GameFirst at 0x54
+    flash[rb + 0x54] = 0x00;
+    flash[rb + 0x55] = 0x00;
+    // GameSize at 0x56 (128 blocks = 65536 / 512)
+    flash[rb + 0x56] = 0x80;
+    flash[rb + 0x57] = 0x00;
+
+    // --- FAT (block 254, offset 0x1FC00) ---
+    const fb: usize = 254 * 512;
+    // All entries start as 0xFF (unallocated), already set by memset
+    // Mark root block as FAT_LastInFile
+    flash[fb + 255 * 2] = 0xFA;
+    flash[fb + 255 * 2 + 1] = 0xFF;
+    // Mark FAT block itself as FAT_LastInFile
+    flash[fb + 254 * 2] = 0xFA;
+    flash[fb + 254 * 2 + 1] = 0xFF;
+    // Directory chain: block 253 → 252 → ... → 241 → FAT_LastInFile
+    {
+        var i: u16 = 253;
+        while (i > 241) : (i -= 1) {
+            flash[fb + i * 2] = @intCast(i - 1);
+            flash[fb + i * 2 + 1] = 0x00;
+        }
+        flash[fb + 241 * 2] = 0xFA;
+        flash[fb + 241 * 2 + 1] = 0xFF;
+    }
+
+    // Directory table (blocks 241-253) is already 0xFF → all entries Type=0x00 (None)
+}
+
+/// Initialize BIOS RTC date and SFRs (mirrors DreamPotato's InitializeRTCDate).
+/// Sets PC to BIOSAfterDateIsSet (0x2E1) so the BIOS skips serial date query,
+/// writes a fake date to RAM, and configures SFRs the BIOS expects at startup.
+fn initBiosRtc(cpu: *Cpu) void {
+    // Jump past the BIOS date-init code (serial port query for Dreamcast date)
+    cpu.pc = 0x2E1;
+
+    // Write current date to RAM bank 0 (BCD format + binary)
+    // RAM addresses from DreamPotato's BuiltInRamSymbols
+    cpu.ram_bank0[0x10] = 0x20; // Century BCD (20)
+    cpu.ram_bank0[0x11] = 0x26; // Year BCD (26)
+    cpu.ram_bank0[0x12] = 0x07; // Month BCD (07)
+    cpu.ram_bank0[0x13] = 0x17; // Day BCD (17)
+    cpu.ram_bank0[0x14] = 0x12; // Hour BCD (12)
+    cpu.ram_bank0[0x15] = 0x30; // Minute BCD (30)
+    cpu.ram_bank0[0x16] = 0x00; // Second BCD (00)
+    cpu.ram_bank0[0x17] = 0x00; // Year MSB
+    cpu.ram_bank0[0x18] = 0x07; // Year LSB (2026 = 0x07EA)
+    cpu.ram_bank0[0x19] = 7; // Month (binary)
+    cpu.ram_bank0[0x1A] = 17; // Day (binary)
+    cpu.ram_bank0[0x1B] = 12; // Hour (binary)
+    cpu.ram_bank0[0x1C] = 30; // Minute (binary)
+    cpu.ram_bank0[0x1D] = 0; // Second (binary)
+    cpu.ram_bank0[0x1E] = 0; // HalfSecond
+    cpu.ram_bank0[0x1F] = 0; // LeapYear (2026 is not leap)
+    // DateTime_DateSet at 0xFF = 0xFF means "date is set"
+    cpu.ram_bank0[0xFF] = 0xFF;
+
+    // SFR initialization matching DreamPotato's InitializeRTCDate
+    // IE: EA=1, PriorityControl0=1, PriorityControl1=1
+    cpu.sfr_raw[0x08] = 0x83;
+    // IP: Int3_BaseTimer=1
+    cpu.sfr_raw[0x09] = 0x08;
+    // OCR: oscillator config (0xA3)
+    cpu.sfr_raw[0x0E] = 0xA3;
+    // MCR: 0x09
+    cpu.sfr_raw[0x0F] = 0x09;
+    // T1LC: 0xFF
+    cpu.sfr_raw[0x1A] = 0xFF;
+    // T1L: 0xFF
+    cpu.sfr_raw[0x1B] = 0xFF;
+    // CNR: 0x05
+    cpu.sfr_raw[0x20] = 0x05;
+    // TDR: 0x20
+    cpu.sfr_raw[0x21] = 0x20;
+    // P1: 0xC0
+    cpu.sfr_raw[0x44] = 0xC0;
+    // P1DDR: 0xC0
+    cpu.sfr_raw[0x45] = 0xC0;
+    // P3INT: Continuous=1, Enable=1 → 0x05
+    cpu.sfr_raw[0x4E] = 0x05;
+    // SFR 0x51: 0x20
+    cpu.sfr_raw[0x51] = 0x20;
+    // FPR: 0x00
+    cpu.sfr_raw[0x40] = 0x00;
+    // SFR 0x55: 0xFF
+    cpu.sfr_raw[0x55] = 0xFF;
+    // VSEL: INCE=1 (bit4) → 0x10 (reset default 0xFC but DreamPotato sets Ince)
+    cpu.sfr_raw[0x63] = 0x10;
+    // BTCR: 0x79 (BT_RUN=1, BT0_IE=1, BT1 threshold 2048)
+    cpu.sfr_raw[0x7F] = 0x79;
+    // ISL: 0xC0 (base timer clock = quartz oscillator)
+    cpu.sfr_raw[0x5F] = 0xC0;
 }
 
 fn renderLcd(cpu: *Cpu) void {
