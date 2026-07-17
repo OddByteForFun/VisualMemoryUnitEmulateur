@@ -21,6 +21,7 @@ pub const Cpu = struct {
         bank_id: enum { rom, flash0, flash1 },
     },
     rom_data: []u8, // sauvegarde du slice ROM pour pouvoir revenir depuis Flash
+    pending_ext: u8 = 0, // valeur en attente du registre Ext (bank switch différé sur JMPF)
 
     // RAM space (512 octets, accédé par load/store)
     ram_bank0: [256]u8, // bank 0 : système + stack
@@ -101,6 +102,8 @@ pub const Cpu = struct {
         cpu.sfr_raw[SFR_BTCR] = 0x41; // 17FH: Base timer control (BT0_CYCLE + BT0_IE)
         cpu.sfr_raw[SFR_VCCR] = 0x80; // 127H: LCD display control (VCCR7=1)
         cpu.sfr_raw[SFR_VSEL] = 0xFC; // 163H: VTRBF control (INCE=1 + reset defaults)
+        cpu.sfr_raw[SFR_EXT] = 0x80; // 10DH: External memory control (Ext3=1, Ext0=0 → ROM)
+        cpu.pending_ext = 0x80; // Ext3=1, Ext0=0 → ROM mode
         return cpu;
     }
 
@@ -135,7 +138,56 @@ pub const Cpu = struct {
         self.sfr_raw[SFR_BTCR] = 0x41; // 17FH: Base timer control (BT0_CYCLE + BT0_IE)
         self.sfr_raw[SFR_VCCR] = 0x80; // 127H: LCD display control (VCCR7=1)
         self.sfr_raw[SFR_VSEL] = 0xFC; // 163H: VTRBF control (INCE=1 + reset defaults)
+        self.sfr_raw[SFR_EXT] = 0x80; // 10DH: External memory control (Ext3=1, Ext0=0 → ROM)
         self.inst_bank = .{ .data = self.rom_data, .bank_id = .rom };
+        self.pending_ext = 0x80; // Ext3=1, Ext0=0 → ROM mode (comme DreamPotato)
+    }
+
+    /// Synchronise l'inst_bank avec la valeur courante de pending_ext.
+    /// Appelé uniquement après JMPF (bank switch différé).
+    pub fn syncInstructionBank(self: *Cpu) void {
+        const ext = self.pending_ext;
+        // Interprétation selon DreamPotato : Ext3 (bit 3) et Ext0 (bit 0)
+        // ROM         → Ext3=1, Ext0=0
+        // FlashBank0  → Ext3=1, Ext0=1
+        // FlashBank1  → Ext3=0, Ext0=0
+        if (ext & 0x08 != 0) {
+            // Ext3 = 1
+            if (ext & 0x01 != 0) {
+                // Ext0 = 1 → FlashBank0
+                self.inst_bank.data = self.flash[0..65536];
+                self.inst_bank.bank_id = .flash0;
+            } else {
+                // Ext0 = 0 → ROM
+                self.inst_bank.data = self.rom_data;
+                self.inst_bank.bank_id = .rom;
+            }
+        } else {
+            // Ext3 = 0 → FlashBank1
+            self.inst_bank.data = self.flash[65536..131072];
+            self.inst_bank.bank_id = .flash1;
+        }
+    }
+
+    /// Fixe directement la bank d'instructions (pour usage UI/tests).
+    pub fn setInstructionBank(self: *Cpu, bank: enum { rom, flash0, flash1 }) void {
+        switch (bank) {
+            .rom => {
+                self.pending_ext = 0x80; // Ext3=1, Ext0=0
+                self.inst_bank.data = self.rom_data;
+                self.inst_bank.bank_id = .rom;
+            },
+            .flash0 => {
+                self.pending_ext = 0x89; // Ext3=1, Ext0=1
+                self.inst_bank.data = self.flash[0..65536];
+                self.inst_bank.bank_id = .flash0;
+            },
+            .flash1 => {
+                self.pending_ext = 0x00; // Ext3=0, Ext0=0
+                self.inst_bank.data = self.flash[65536..131072];
+                self.inst_bank.bank_id = .flash1;
+            },
+        }
     }
 
     pub fn currentRamBank(self: *Cpu) *[256]u8 {
@@ -755,19 +807,10 @@ pub const Cpu = struct {
                 }
             },
             SFR_EXT => {
-                // bit 0 : ROM vs Flash, bit 1 : sélection bank Flash (0=bank0, 1=bank1)
-                if (val & 0x01 != 0) {
-                    if (val & 0x02 != 0) {
-                        self.inst_bank.data = self.flash[65536..131072];
-                        self.inst_bank.bank_id = .flash1;
-                    } else {
-                        self.inst_bank.data = self.flash[0..65536];
-                        self.inst_bank.bank_id = .flash0;
-                    }
-                } else {
-                    self.inst_bank.data = self.rom_data;
-                    self.inst_bank.bank_id = .rom;
-                }
+                // Bank switch différé : la valeur est stockée, mais le switch
+                // ne sera effectué que lors du prochain JMPF (syncInstructionBank).
+                // Cela correspond au comportement matériel réel et à DreamPotato.
+                self.pending_ext = val;
             },
 
             else => {},

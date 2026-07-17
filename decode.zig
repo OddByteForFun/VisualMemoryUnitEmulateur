@@ -569,6 +569,7 @@ pub fn step(cpu: *Cpu) u8 {
             const hi = cpu.fetch8();
             const lo = cpu.fetch8();
             cpu.pc = (@as(u16, hi) << 8) | @as(u16, lo);
+            cpu.syncInstructionBank(); // bank switch différé : commit le switch ici
         },
         .ret => {
             const hi = cpu.ram_bank0[cpu.sp];
