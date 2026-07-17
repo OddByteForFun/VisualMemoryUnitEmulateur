@@ -40,6 +40,9 @@ pub fn main(init: std.process.Init) !void {
     std.debug.print("ROM: {d} bytes\n", .{n});
 
     var cpu = Cpu.init(rom);
+    const copy_len: usize = @min(@as(usize, n), 65536);
+    @memcpy(cpu.flash[0..@min(rom.len, 65536)], rom[0..@min(rom.len, 65536)]);
+    @memcpy(cpu.flash[65536..][0..copy_len], rom[0..copy_len]);
     cpu.reset();
 
     dbg.init();
@@ -70,8 +73,9 @@ pub fn main(init: std.process.Init) !void {
         }
 
         if (frames % 60 == 0) {
+            dbg.log("SP WATCH: {X:0>2} PC={X:0>4} depth={d}", .{ cpu.sp, cpu.pc, cpu.interrupt_depth });
             dbg.log("HALTED STATUS: halted={} PC={X:0>4} cyc={d} p3_reads={d} p3={X:0>2} P3INT={X:0>2} IE={X:0>2} depth={d} blk={d}", .{
-                cpu.halted, cpu.pc, cycles, cpu.p3_read_count, cpu.p3_buttons,
+                cpu.halted,        cpu.pc,            cycles,              cpu.p3_read_count,     cpu.p3_buttons,
                 cpu.sfr_raw[0x4E], cpu.sfr_raw[0x08], cpu.interrupt_depth, cpu.interrupt_blocked,
             });
             cpu.p3_read_count = 0;

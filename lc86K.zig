@@ -133,6 +133,7 @@ pub const Cpu = struct {
         self.sfr_raw[SFR_BTCR] = 0x41; // 17FH: Base timer control (BT0_CYCLE + BT0_IE)
         self.sfr_raw[SFR_VCCR] = 0x80; // 127H: LCD display control (VCCR7=1)
         self.sfr_raw[SFR_VSEL] = 0xFC; // 163H: VTRBF control (INCE=1 + reset defaults)
+        self.inst_bank = .{ .data = self.rom_data, .bank_id = .rom };
     }
 
     pub fn currentRamBank(self: *Cpu) *[256]u8 {
