@@ -64,6 +64,8 @@ pub const Inst = enum(u8) {
     subc_ri,
     ror,
     ldc,
+    ldf,
+    stf,
     xch_d9,
     xch_ri,
     clr1,
@@ -130,7 +132,8 @@ fn decodeOpcode(opcode: u8) DecodeResult {
             0x8...0xF => .{ .inst = .bpc, .opcode = opcode, .mode = .d9, .bit = opcode & 0x7 },
         },
         0x5 => switch (col) {
-            0x0...0x1 => .{ .inst = .nop, .opcode = opcode },
+            0x0 => .{ .inst = .ldf, .opcode = opcode },
+            0x1 => .{ .inst = .stf, .opcode = opcode },
             0x2...0x3 => .{ .inst = .dbnz_d9, .opcode = opcode, .mode = .d9 },
             0x4...0x7 => .{ .inst = .dbnz_ri, .opcode = opcode, .mode = .ri, .ri = col & 0x3 },
             0x8...0xF => .{ .inst = .bpc, .opcode = opcode, .mode = .d9, .bit = opcode & 0x7 },
@@ -243,6 +246,8 @@ fn cycles(dec: DecodeResult) u8 {
         .subc_imm, .subc_d9, .subc_ri => 1,
         .ror => 1,
         .ldc => 2,
+        .ldf => 2,
+        .stf => 2,
         .xch_d9, .xch_ri => 1,
         .clr1 => 1,
         .rorc => 1,
@@ -582,6 +587,12 @@ pub fn step(cpu: *Cpu) u8 {
             // (ACC) ← (BNK)((TRR) + (ACC)) [ROM]
             const trr = (@as(u16, cpu.trh) << 8) | cpu.trl;
             cpu.a = cpu.inst_bank.data[trr +% cpu.a];
+        },
+        .ldf => {
+            cpu.a = cpu.readFlash();
+        },
+        .stf => {
+            cpu.writeFlash(cpu.a);
         },
         .jmp_a12 => {
             const imm8 = cpu.fetch8();

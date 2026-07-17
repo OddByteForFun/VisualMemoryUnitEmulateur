@@ -672,6 +672,7 @@ pub const Cpu = struct {
     const IP_SIO1: u8 = 0x80; // IE bit 7
 
     const SFR_EXT: u7 = 0x0D;
+    const SFR_FPR: u7 = 0x54; // Flash Protection Register (bit0=FlashAddressBank, bit1=FlashWriteUnlock)
 
     pub fn loadSFR(self: *Cpu, offset: u7) u8 {
         return switch (offset) {
@@ -847,6 +848,21 @@ pub const Cpu = struct {
         const val = self.inst_bank.data[self.pc];
         self.pc +%= 1;
         return val;
+    }
+
+    /// LDF: read flash at 17-bit address = TRL | (TRH << 8) | (FPR.FlashAddressBank ? 0x10000 : 0)
+    pub fn readFlash(self: *Cpu) u8 {
+        const a17: u17 = @as(u17, self.trl) | (@as(u17, self.trh) << 8) | (if (self.sfr_raw[SFR_FPR] & 0x01 != 0) @as(u17, 0x10000) else 0);
+        if (a17 < 131072) return self.flash[a17];
+        return 0xFF;
+    }
+
+    /// STF: write flash at 17-bit address (only if FlashWriteUnlock sequence matched)
+    pub fn writeFlash(self: *Cpu, val: u8) void {
+        const a17: u17 = @as(u17, self.trl) | (@as(u17, self.trh) << 8) | (if (self.sfr_raw[SFR_FPR] & 0x01 != 0) @as(u17, 0x10000) else 0);
+        if (a17 < 131072) {
+            self.flash[a17] = val;
+        }
     }
 
     pub fn fetch16(self: *Cpu) u16 {
