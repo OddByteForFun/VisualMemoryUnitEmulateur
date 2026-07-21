@@ -306,15 +306,14 @@ fn initVmuFlash(cpu: *Cpu) void {
     // Directory table (blocks 241-253) is already 0xFF → all entries Type=0x00 (None)
 }
 
-/// Initialize BIOS RTC date and SFRs (mirrors DreamPotato's InitializeRTCDate).
-/// Sets PC to BIOSAfterDateIsSet (0x2E1) so the BIOS skips serial date query,
-/// writes a fake date to RAM, and configures SFRs the BIOS expects at startup.
+/// Initialize BIOS date and SFRs to match libevmu's EvmuRam_IBehavior_reset_().
+/// Sets PC to 0x2E1 to skip the Dreamcast serial date query (we don't emulate the serial link).
+/// Writes date to RAM and configures SFRs the BIOS expects at startup.
 fn initBiosRtc(cpu: *Cpu) void {
-    // Jump past the BIOS date-init code (serial port query for Dreamcast date)
+    // Jump past the BIOS serial date-query code (no Dreamcast serial emulation)
     cpu.pc = 0x2E1;
-
     // Write current date to RAM bank 0 (BCD format + binary)
-    // RAM addresses from DreamPotato's BuiltInRamSymbols
+    // Same addresses as EvmuRom_setDateTime() in evmu_rom.c
     cpu.ram_bank0[0x10] = 0x20; // Century BCD (20)
     cpu.ram_bank0[0x11] = 0x26; // Year BCD (26)
     cpu.ram_bank0[0x12] = 0x07; // Month BCD (07)
@@ -324,51 +323,31 @@ fn initBiosRtc(cpu: *Cpu) void {
     cpu.ram_bank0[0x16] = 0x00; // Second BCD (00)
     cpu.ram_bank0[0x17] = 0x00; // Year MSB
     cpu.ram_bank0[0x18] = 0x07; // Year LSB (2026 = 0x07EA)
-    cpu.ram_bank0[0x19] = 7; // Month (binary)
-    cpu.ram_bank0[0x1A] = 17; // Day (binary)
-    cpu.ram_bank0[0x1B] = 12; // Hour (binary)
-    cpu.ram_bank0[0x1C] = 30; // Minute (binary)
-    cpu.ram_bank0[0x1D] = 0; // Second (binary)
+    cpu.ram_bank0[0x19] = 0x07; // Month (binary)
+    cpu.ram_bank0[0x1A] = 0x17; // Day (binary)
+    cpu.ram_bank0[0x1B] = 0x12; // Hour (binary)
+    cpu.ram_bank0[0x1C] = 0x30; // Minute (binary)
+    cpu.ram_bank0[0x1D] = 0x00; // Second (binary)
     cpu.ram_bank0[0x1E] = 0; // HalfSecond
-    cpu.ram_bank0[0x1F] = 0; // LeapYear (2026 is not leap)
-    // DateTime_DateSet at 0xFF = 0xFF means "date is set"
-    cpu.ram_bank0[0xFF] = 0xFF;
+    cpu.ram_bank0[0x1F] = 0; // LeapYear
+    // DateTime_DateSet at 0x31 = 0xFF means "date is set" (evmu_address_space.h)
+    cpu.ram_bank0[0x31] = 0xFF;
 
-    // SFR initialization matching DreamPotato's InitializeRTCDate
-    // IE: EA=1, PriorityControl0=1, PriorityControl1=1
-    cpu.sfr_raw[0x08] = 0x83;
-    // IP: Int3_BaseTimer=1
-    cpu.sfr_raw[0x09] = 0x08;
-    // OCR: oscillator config (0xA3)
-    cpu.sfr_raw[0x0E] = 0xA3;
-    // MCR: 0x09
-    cpu.sfr_raw[0x0F] = 0x09;
-    // T1LC: 0xFF
-    cpu.sfr_raw[0x1A] = 0xFF;
-    // T1L: 0xFF
-    cpu.sfr_raw[0x1B] = 0xFF;
-    // CNR: 0x05
-    cpu.sfr_raw[0x20] = 0x05;
-    // TDR: 0x20
-    cpu.sfr_raw[0x21] = 0x20;
-    // P1: 0xC0
-    cpu.sfr_raw[0x44] = 0xC0;
-    // P1DDR: 0xC0
-    cpu.sfr_raw[0x45] = 0xC0;
-    // P3INT: Continuous=1, Enable=1 → 0x05
-    cpu.sfr_raw[0x4E] = 0x05;
-    // SFR 0x51: 0x20
-    cpu.sfr_raw[0x51] = 0x20;
-    // FPR: 0x00
-    cpu.sfr_raw[0x40] = 0x00;
-    // SFR 0x55: 0xFF
-    cpu.sfr_raw[0x55] = 0xFF;
-    // VSEL: INCE=1 (bit4) → 0x10 (reset default 0xFC but DreamPotato sets Ince)
-    cpu.sfr_raw[0x63] = 0x10;
-    // BTCR: 0x79 (BT_RUN=1, BT0_IE=1, BT1 threshold 2048)
-    cpu.sfr_raw[0x7F] = 0x79;
-    // ISL: 0xC0 (base timer clock = quartz oscillator)
-    cpu.sfr_raw[0x5F] = 0xC0;
+    // SFR initialization matching libevmu's EvmuRam_IBehavior_reset_() in evmu_ram.c
+    cpu.sfr_raw[0x07] = 0x00; // PCON: disable HALT/HOLD
+    cpu.sfr_raw[0x08] = 0xFF; // IE: all interrupts enabled (EA=1 + all individual)
+    cpu.sfr_raw[0x09] = 0x00; // IP: no priority (default)
+    cpu.sfr_raw[0x0E] = 0xA3; // OCR: quartz selected (10), RC stopped (1), CF stopped (1), /6 (1)
+    cpu.sfr_raw[0x20] = 0x08; // MCR: LCD update enable (bit3)
+    cpu.sfr_raw[0x27] = 0x80; // VCCR: LCD on (bit7)
+    cpu.sfr_raw[0x45] = 0xFF; // P1DDR: all output
+    cpu.sfr_raw[0x46] = 0xBF; // P1FCR: port 1 function control
+    cpu.sfr_raw[0x4D] = 0x00; // P3DDR: all input
+    cpu.sfr_raw[0x4E] = 0xFD; // P3INT: P30INT=1 (enable), P31INT=0, P32INT=1 (continuous)
+    cpu.sfr_raw[0x5C] = 0x02; // P7: P71 mask
+    cpu.sfr_raw[0x5F] = 0xC0; // ISL: base timer clock = quartz oscillator
+    cpu.sfr_raw[0x63] = 0xFC; // VSEL: default value
+    cpu.sfr_raw[0x7F] = 0x41; // BTCR: BT_INT0_SRC=quartz, BT_INT0_IE=1
 }
 
 fn renderLcd(cpu: *Cpu) void {
@@ -429,6 +408,18 @@ fn updateButtons(cpu: *Cpu) void {
         dbg.log("BUTTONS: {X:0>2} -> {X:0>2} (PC={X:0>4})", .{ cpu.p3_buttons, buttons, cpu.pc });
     }
     cpu.p3_buttons = buttons;
+
+    // libevmu EvmuGamepad_pollButtons_: once per frame, set P31INT if button pressed
+    var p3int = cpu.sfr_raw[0x4E]; // P3INT
+    const p32int = p3int & 0x04 != 0; // P32INT: 1=continuous, 0=edge
+
+    if (buttons != 0xFF) { // any button pressed
+        if (p32int) { // continuous mode
+            p3int |= 0x02; // set P31INT source flag
+            cpu.sfr_raw[0x4E] = p3int;
+        }
+    }
+    // libevmu also clears HOLD mode here, but we don't implement HOLD yet
 }
 
 fn flushLogFile(init: std.process.Init) void {

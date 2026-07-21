@@ -609,6 +609,7 @@ pub fn step(cpu: *Cpu) u8 {
             cpu.pc = (@as(u16, hi) << 8) | @as(u16, lo);
             std.debug.print("RETI -> PC={X:0>4} depth_before={d}\n", .{ cpu.pc, cpu.interrupt_depth });
             cpu.interrupt_depth = 0;
+            cpu.process_this_instr = false; // skip PIC dispatch for 1 instruction
         },
         .dbnz_d9, .dbnz_ri => {
             //(PC) ← (PC) + 3, (d9) = (d9)-1, if (d9) ≠ 0 then (PC) ← (PC) + r8

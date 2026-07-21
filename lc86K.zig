@@ -65,6 +65,7 @@ pub const Cpu = struct {
     // interruptions
     interrupt_depth: u8 = 0, // verifier sur une IRQ est possible (0, ok, 1 attente RETI)
     interrupt_blocked: u8 = 0,
+    process_this_instr: bool = true, // libevmu processThisInstr: skip PIC dispatch 1 instr after RETI
 
     // Ports I/O
     p3_buttons: u8 = 0xFF, // état physique des boutons (active-low, 1=relâché)
@@ -81,16 +82,16 @@ pub const Cpu = struct {
                 .bank_id = .rom,
             },
             .rom_data = rom,
-            .ram_bank0 = .{0} ** 256,
-            .ram_bank1 = .{0} ** 256,
-            .sfr_raw = .{0} ** 0x80,
+            .ram_bank0 = @splat(0),
+            .ram_bank1 = @splat(0),
+            .sfr_raw = @splat(0),
             .xram_banks = .{
-                .bank0 = .{0} ** 128,
-                .bank1 = .{0} ** 128,
-                .bank2 = .{0} ** 6,
+                .bank0 = @splat(0),
+                .bank1 = @splat(0),
+                .bank2 = @splat(0),
             },
-            .work_ram = .{0} ** 512,
-            .flash = .{0} ** 131072,
+            .work_ram = @splat(0),
+            .flash = @splat(0),
         };
         cpu.sp = 0x7F; // Stack pointer (hardware reset default)
         // VMU hardware SFR reset defaults (table 2.6, p.158 + DreamPotato reference)
@@ -426,36 +427,22 @@ pub const Cpu = struct {
     };
 
     pub fn requestLevelDrivenInterrupts(self: *Cpu) void {
-        var p3int = self.sfr_raw[SFR_P3INT];
-        const p30int = p3int & P3INT_P30INT != 0; // interrupt P3 enable
-        const p32int = p3int & P3INT_P32INT != 0; // 1=continuous, 0=edge
-
-        if (!p30int) return;
-
-        if (p32int) {
-            // Mode continuous: source flag tant qu'un bouton est pressé
-            if (self.p3_buttons != 0xFF) {
-                p3int |= P3INT_P31INT;
-            } else {
-                p3int &= ~P3INT_P31INT;
-            }
-            self.sfr_raw[SFR_P3INT] = p3int;
-        } else {
-            // Mode edge: source flag sur front descendant (1→0 sur un bit P3)
-            const falling = self.prev_p3_buttons & ~self.p3_buttons;
-            if (falling != 0) {
-                p3int |= P3INT_P31INT;
-                self.sfr_raw[SFR_P3INT] = p3int;
-            }
-        }
-
-        self.prev_p3_buttons = self.p3_buttons;
+        // P31INT is now set by updateButtons() in main.zig (once per frame,
+        // matching libevmu's EvmuGamepad_pollButtons_). Empty here to avoid
+        // per-instruction IRQ storms.
+        _ = self;
     }
 
     pub fn servicePendingInterrupt(self: *Cpu) void {
         var val: ?Interruptions = null;
 
         if (self.interrupt_depth != 0) return;
+
+        // libevmu processThisInstr: skip dispatch for 1 instruction after RETI
+        if (!self.process_this_instr) {
+            self.process_this_instr = true;
+            return;
+        }
 
         if (self.interrupt_blocked > 0) {
             self.interrupt_blocked -%= 1;

@@ -13,7 +13,7 @@ pub var log_level: LogLevel = .info;
 
 pub const LOG_LINES: usize = 64;
 pub var log_ring: [LOG_LINES][256]u8 = undefined;
-pub var log_ring_len: [LOG_LINES]usize = .{0} ** LOG_LINES;
+pub var log_ring_len: [LOG_LINES]usize = @splat(0);
 pub var log_ring_pos: usize = 0;
 pub var log_ring_count: usize = 0;
 
