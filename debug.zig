@@ -53,6 +53,10 @@ pub fn log(comptime fmt: []const u8, args: anytype) void {
     var buf: [512]u8 = undefined;
     const msg = std.fmt.bufPrint(&buf, fmt, args) catch return;
 
+    if (@intFromEnum(log_level) < @intFromEnum(LogLevel.trace)) {
+        std.debug.print("{s}\n", .{msg});
+    }
+
     if (@intFromEnum(log_level) != 0) {
         const len = @min(msg.len, 255);
         @memcpy(log_ring[log_ring_pos][0..len], msg[0..len]);
@@ -124,7 +128,7 @@ pub fn disassembleAt(cpu: *Cpu, buf: []u8, pc: u16) usize {
             0x0 => return fmtI(buf, start_pc, "NOP"),
             0x1 => {
                 const r8 = rom[p];
-                const tgt: u16 = @intCast(@as(i16, @intCast(start_pc)) + 2 + @as(i16, @as(i8, @bitCast(r8))));
+                const tgt: u16 = start_pc + 2 +% @as(u16, @bitCast(@as(i16, @as(i8, @bitCast(r8)))));
                 return fmtA(buf, start_pc, "BR", tgt);
             },
             0x2, 0x3 => {

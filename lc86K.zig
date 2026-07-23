@@ -11,10 +11,24 @@ pub const Psw = packed struct(u8) {
     cy: bool = false, // bit 7 — Carry (unsigned overflow)
 };
 
-var int3_dumped: bool = false;
-var trampoline_dumped: bool = false;
-
 pub const Cpu = struct {
+    pub const BiosPhase = enum(u8) {
+        none,
+        bios_init,
+        bios_clear_ram,
+        bios_post_init,
+        bios_date_wait,
+        bios_lcd_setup,
+        bios_date_ok,
+        bios_main_loop,
+        bios_mode_0,
+        bios_mode_1,
+        bios_mode_2,
+        bios_game_launch,
+        bios_no_game,
+        game_running,
+    };
+
     // Banque d'instructions (64KB, 3 banks : ROM / Flash0 / Flash1)
     inst_bank: struct {
         data: []u8,
@@ -73,7 +87,14 @@ pub const Cpu = struct {
 
     // diagnostic
     xram_write_count: u32 = 0,
+    vtrbf_write_count: u32 = 0,
     p3_read_count: u32 = 0,
+    maple_irq_pending: bool = false, // IRQ 9 (Maple RFB) pending flag
+    bios_phase: BiosPhase = .none,
+    bios_phase_seen: [13]bool = @splat(false), // track which phases have been seen
+    ext_write_pc: u16 = 0, // PC of last EXT SFR write
+    sync_count: u32 = 0, // how many times syncInstructionBank was called
+    last_sync_bank: enum { rom, flash0, flash1 } = .rom,
 
     pub fn init(rom: []u8) Cpu {
         var cpu = Cpu{
@@ -147,6 +168,7 @@ pub const Cpu = struct {
     /// Synchronise l'inst_bank avec la valeur courante de pending_ext.
     /// Appelé uniquement après JMPF (bank switch différé).
     pub fn syncInstructionBank(self: *Cpu) void {
+        self.sync_count += 1;
         const ext = self.pending_ext;
         // Interprétation selon DreamPotato : Ext3 (bit 3) et Ext0 (bit 0)
         // ROM         → Ext3=1, Ext0=0
@@ -158,15 +180,18 @@ pub const Cpu = struct {
                 // Ext0 = 1 → FlashBank0
                 self.inst_bank.data = self.flash[0..65536];
                 self.inst_bank.bank_id = .flash0;
+                self.last_sync_bank = .flash0;
             } else {
                 // Ext0 = 0 → ROM
                 self.inst_bank.data = self.rom_data;
                 self.inst_bank.bank_id = .rom;
+                self.last_sync_bank = .rom;
             }
         } else {
             // Ext3 = 0 → FlashBank1
             self.inst_bank.data = self.flash[65536..131072];
             self.inst_bank.bank_id = .flash1;
+            self.last_sync_bank = .flash1;
         }
     }
 
@@ -196,11 +221,12 @@ pub const Cpu = struct {
     }
 
     pub fn load8(self: *Cpu, addr: u9) u8 {
-        return switch (addr) {
+        const result = switch (addr) {
             0...0xFF => self.currentRamBank()[addr],
             0x100...0x17F => self.loadSFR(@as(u7, @truncate(addr - 0x100))),
             0x180...0x1FF => self.loadXram(@as(u7, @truncate(addr - 0x180))),
         };
+        return result;
     }
 
     pub fn store8(self: *Cpu, addr: u9, val: u8) void {
@@ -213,11 +239,6 @@ pub const Cpu = struct {
             },
             0x180...0x1FF => {
                 self.xram_write_count += 1;
-                if (self.xram_write_count <= 500) {
-                    std.debug.print("XRAM WRITE #{d} addr={X:0>3} val={X:0>2} xbnk={d}\n", .{ self.xram_write_count, addr, val, self.sfr_raw[SFR_XBNK] & 0x03 });
-                } else if (self.xram_write_count == 501) {
-                    std.debug.print("... (further XRAM writes suppressed)\n", .{});
-                }
                 self.storeXram(@as(u7, @truncate(addr - 0x180)), val);
             },
         }
@@ -395,7 +416,6 @@ pub const Cpu = struct {
             const int0_rate: u16 = if (btcr & BTCR_BT0_CYCLE != 0) 0x0040 else 0x4000;
             if (old_counter / int0_rate < new_counter / int0_rate or new_counter == 0) {
                 self.sfr_raw[SFR_BTCR] |= BTCR_BT0_FLAG;
-                std.debug.print("BT0_FLAG set: counter {d}->{d} rate={d} BT0_IE={} EA={}\n", .{ old_counter, new_counter, int0_rate, (btcr & BTCR_BT0_IE != 0), (self.sfr_raw[SFR_IE] & 0x80 != 0) });
             }
 
             // BT1 : seuil configurable selon BTCR5:BTCR4
@@ -424,6 +444,7 @@ pub const Cpu = struct {
         t0h, // t0h
         t1, // timer 1 (T1H ou T1L overflow)
         p3, // Port 3 level interrupt (buttons)
+        maple, // Maple IRQ 9 (IRQ RFB)
     };
 
     pub fn requestLevelDrivenInterrupts(self: *Cpu) void {
@@ -485,11 +506,18 @@ pub const Cpu = struct {
             }
         }
 
+        // Maple IRQ 9 (IRQ RFB, vector 0x0043)
+        // Triggered when Maple transfer completes (TXDONE or IRQREQ in MPLSTA)
+        if (val == null and self.maple_irq_pending) {
+            val = .maple;
+        }
+
         const vecteur: u16 = if (val) |irq| switch (irq) {
             .int2 => 0x0013,
             .int3 => 0x001B,
             .t0h => 0x0023,
             .t1 => 0x002B,
+            .maple => 0x0043,
             .p3 => 0x004B,
         } else return;
 
@@ -502,51 +530,6 @@ pub const Cpu = struct {
         self.interrupt_depth = 1;
         self.halted = false;
 
-        if (val == .int3) {
-            var once_printed = struct {
-                var done: bool = false;
-            }.done;
-            if (!once_printed) {
-                std.debug.print("=== INT3 ISR bytes at 0x001B ===\n", .{});
-                var i: usize = 0;
-                while (i < 32) : (i += 1) {
-                    std.debug.print("{X:0>2} ", .{self.inst_bank.data[0x1B + i]});
-                }
-                std.debug.print("\n", .{});
-                once_printed = true;
-            }
-        }
-
-        if (val == .int3 and !int3_dumped) {
-            int3_dumped = true;
-            std.debug.print("=== INT3 ISR bytes at 0x001B ===\n", .{});
-            var i: usize = 0;
-            while (i < 32) : (i += 1) {
-                std.debug.print("{X:0>2} ", .{self.inst_bank.data[0x1B + i]});
-            }
-            std.debug.print("\n", .{});
-        }
-
-        if (val == .int3 and !trampoline_dumped) {
-            trampoline_dumped = true;
-            std.debug.print("=== Trampoline bytes at 0x0130 (current bank={s}) ===\n", .{@tagName(self.inst_bank.bank_id)});
-            var i: usize = 0;
-            while (i < 16) : (i += 1) {
-                std.debug.print("{X:0>2} ", .{self.inst_bank.data[0x130 + i]});
-            }
-            std.debug.print("\n=== Same range in rom_data ===\n", .{});
-            i = 0;
-            while (i < 16) : (i += 1) {
-                std.debug.print("{X:0>2} ", .{self.rom_data[0x130 + i]});
-            }
-            std.debug.print("\n=== Same range in flash[0x130..] (bank0) ===\n", .{});
-            i = 0;
-            while (i < 16) : (i += 1) {
-                std.debug.print("{X:0>2} ", .{self.flash[0x130 + i]});
-            }
-            std.debug.print("\n", .{});
-        }
-
         if (val) |irq| switch (irq) {
             .int2 => self.sfr_raw[SFR_T0CNT] &= ~T0CNT_T0LOVF,
             .int3 => self.sfr_raw[SFR_BTCR] &= ~(BTCR_BT0_FLAG | BTCR_BT1_FLAG),
@@ -555,15 +538,48 @@ pub const Cpu = struct {
                 self.sfr_raw[SFR_T1CNT] &= ~(T1CNT_T1HOVF | T1CNT_T1LOVF);
             },
             .p3 => {}, // P31INT source flag stays set until cleared by ISR
+            .maple => self.maple_irq_pending = false,
         };
+    }
 
-        std.debug.print("IRQ: {s} vec={X:0>4} PC={X:0>4}->{X:0>4} P3={X:0>2}\n", .{
-            @tagName(val.?),
-            vecteur,
-            return_addr,
-            self.pc,
-            self.p3_buttons,
-        });
+    pub fn checkBiosPhase(self: *Cpu) ?BiosPhase {
+        if (self.inst_bank.bank_id != .rom) {
+            if (self.bios_phase != .game_running) {
+                self.bios_phase = .game_running;
+                return .game_running;
+            }
+            return null;
+        }
+        const new_phase: ?BiosPhase = switch (self.pc) {
+            0x0200 => .bios_init,
+            0x024C => .bios_clear_ram,
+            0x0294 => .bios_post_init,
+            0x02AF => .bios_date_wait,
+            0x02C2 => .bios_lcd_setup,
+            0x02EF => .bios_date_ok,
+            0x0317 => .bios_main_loop,
+            0x033A => .bios_mode_0,
+            0x0360 => .bios_mode_1,
+            0x0387 => .bios_mode_2,
+            0x03AE => .bios_game_launch,
+            0x03E1 => .bios_no_game,
+            else => null,
+        };
+        if (new_phase) |phase| {
+            if (self.bios_phase != phase) {
+                std.debug.print("PHASE CHANGE: {} -> {} PC={X:0>4} xram_wr={d} vtrbf_wr={d}\n", .{
+                    self.bios_phase, phase, self.pc, self.xram_write_count, self.vtrbf_write_count,
+                });
+                self.bios_phase = phase;
+                const idx = @intFromEnum(phase);
+                const seen = &self.bios_phase_seen;
+                if (idx < seen.len and !seen[idx]) {
+                    seen[idx] = true;
+                    return phase;
+                }
+            }
+        }
+        return null;
     }
 
     // il s'agit de définir les offsets utilisés par load8 qui ajoute 0x100 à ces valeurs.
@@ -590,6 +606,10 @@ pub const Cpu = struct {
     const SFR_VRMAD1: u7 = 0x64; // Work RAM address low byte
     const SFR_VRMAD2: u7 = 0x65; // Work RAM address high (VRMAD8=bit0 = bank)
     const SFR_VTRBF: u7 = 0x66; // Work RAM data access (read/write via VRMAD)
+    const SFR_VLREG: u7 = 0x67; // Maple word count
+    const SFR_MPLSW: u7 = 0x60; // Maple status word
+    const SFR_MPLSTA: u7 = 0x61; // Maple start/status (bit0=TXDONE, bit1=IRQREQ, bit6=UNK)
+    const SFR_MPLRST: u7 = 0x62; // Maple reset
     const SFR_XBNK: u7 = 0x25; // Sélection banque XRAM (LCD)
     const SFR_P1: u7 = 0x44; // Port 1 (série + PWM audio)
     const SFR_P1DDR: u7 = 0x45; // Port 1 data direction
@@ -686,15 +706,16 @@ pub const Cpu = struct {
                 }
                 return data;
             },
+            SFR_MPLSTA => {
+                return self.sfr_raw[SFR_MPLSTA];
+            },
             else => self.sfr_raw[offset],
         };
     }
 
     pub fn storeSFR(self: *Cpu, offset: u7, val: u8) void {
+        if (offset == SFR_MPLSTA) return; // read-only register
         self.sfr_raw[offset] = val;
-        if (offset == SFR_PCON) {
-            std.debug.print("WRITE PCON: -> {X:0>2} PC={X:0>4} (HALT bit={d})\n", .{ val, self.pc, val & 1 });
-        }
         switch (offset) {
             SFR_ACC => self.a = val,
             SFR_B => self.b = val,
@@ -721,14 +742,11 @@ pub const Cpu = struct {
                 }
             },
             SFR_PCON => {
-                std.debug.print("SFR_PCON write val={X:0>2} bit0={d} PC={X:0>4} halted_before={}\n", .{ val, val & 0x01, self.pc, self.halted });
                 if (val & 0x01 != 0) {
                     self.halted = true;
                 }
             },
-            SFR_P3INT => {
-                std.debug.print("WRITE P3INT: {X:0>2} -> {X:0>2} PC={X:0>4} (P30INT={} P31INT={} P32INT={})\n", .{ self.sfr_raw[offset], val, self.pc, val & P3INT_P30INT != 0, val & P3INT_P31INT != 0, val & P3INT_P32INT != 0 });
-            },
+            SFR_P3INT => {},
             SFR_T0CNT => {
                 if (val & T0CNT_T0LRUN == 0) {
                     self.t0l_counter = self.sfr_raw[SFR_T0LR];
@@ -737,15 +755,9 @@ pub const Cpu = struct {
                     self.t0h_counter = self.sfr_raw[SFR_T0HR];
                 }
             },
-            0x20 => { // MCR (LCD Mode Control)
-                std.debug.print("MCR write val={X:0>2} (MCR3={d} ctrl, MCR0={d} graphic)\n", .{ val, (val >> 3) & 1, val & 1 });
-            },
-            0x27 => { // VCCR (LCD contrast/power)
-                std.debug.print("VCCR write val={X:0>2} (VCCR7={d} LCD on)\n", .{ val, (val >> 7) & 1 });
-            },
-            0x22 => { // STAD (Display start address)
-                std.debug.print("STAD write val={X:0>2}\n", .{val});
-            },
+            0x20 => {}, // MCR (LCD Mode Control)
+            0x27 => {}, // VCCR (LCD contrast/power)
+            0x22 => {}, // STAD (Display start address)
             SFR_VSEL => { // VSEL: bits read/write (reset defaults: 0xFC)
                 self.sfr_raw[SFR_VSEL] = val;
             },
@@ -755,8 +767,15 @@ pub const Cpu = struct {
             SFR_VRMAD2 => {
                 self.vrmad = (self.vrmad & 0xFF) | (@as(u16, val & 0x01) << 8);
             },
+            SFR_MPLRST => {
+                // Maple reset: write $80 then $00 to reset Maple bus
+                self.sfr_raw[SFR_MPLRST] = val;
+            },
+            SFR_MPLSTA => {
+            },
             SFR_VTRBF => {
                 const addr = self.vrmad & 0x1FF;
+                self.vtrbf_write_count +%= 1;
                 if (addr < 512) {
                     self.work_ram[addr] = val;
                 }
@@ -795,9 +814,7 @@ pub const Cpu = struct {
                 }
             },
             SFR_EXT => {
-                // Bank switch différé : la valeur est stockée, mais le switch
-                // ne sera effectué que lors du prochain JMPF (syncInstructionBank).
-                // Cela correspond au comportement matériel réel et à DreamPotato.
+                self.ext_write_pc = self.pc;
                 self.pending_ext = val;
             },
 

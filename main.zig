@@ -116,7 +116,7 @@ pub fn main(init: std.process.Init) !void {
     dbg.log("=== VMU Emulator Start === BIOS: {s} ({d} bytes) Game: {s} ({d} bytes)", .{ bios_path, bios_size, game_path, game_size });
 
     const win_w: i32 = LCD_W * SCALE;
-    const win_h: i32 = LCD_H * SCALE + 24;
+    const win_h: i32 = LCD_H * SCALE + 24 + SCALE + 8;
     rl.initWindow(win_w, win_h, "LC86K VMU Emulator");
     defer rl.closeWindow();
     defer flushLogFile(init);
@@ -137,37 +137,9 @@ pub fn main(init: std.process.Init) !void {
             dbg.clearLogData();
         }
 
-        if (frames % 60 == 0) {
-            dbg.log("SP WATCH: {X:0>2} PC={X:0>4} depth={d}", .{ cpu.sp, cpu.pc, cpu.interrupt_depth });
-            dbg.log("HALTED STATUS: halted={} PC={X:0>4} cyc={d} p3_reads={d} p3={X:0>2} P3INT={X:0>2} IE={X:0>2} depth={d} blk={d}", .{
-                cpu.halted,        cpu.pc,            cycles,              cpu.p3_read_count,     cpu.p3_buttons,
-                cpu.sfr_raw[0x4E], cpu.sfr_raw[0x08], cpu.interrupt_depth, cpu.interrupt_blocked,
-            });
-            cpu.p3_read_count = 0;
-            if (dbg.loop_detected_pc) |lp| {
-                dbg.log("LOOP DETECTED at PC={X:0>4} count={d}", .{ lp, dbg.loop_count });
-            }
-        }
         // Poll input events BEFORE reading key state, so isKeyDown reflects current frame
         rl.pollInputEvents();
         updateButtons(&cpu);
-
-        // Periodic diagnostic to stderr (visible in terminal)
-        if (frames % 120 == 0) {
-            std.debug.print("[frame {d}] enter={} m={} semicolon={} focused={}\n", .{
-                frames,
-                rl.isKeyDown(.enter),
-                rl.isKeyDown(.m),
-                rl.isKeyDown(.semicolon),
-                rl.isWindowFocused(),
-            });
-        }
-        // Detect any key press and print its code
-        while (true) {
-            const key = rl.getKeyPressed();
-            if (@intFromEnum(key) == 0) break;
-            std.debug.print("KEY PRESSED: code={d} ({s})\n", .{ @intFromEnum(key), @tagName(key) });
-        }
 
         const cycles_per_frame: u64 = 100_000;
         var i: u64 = 0;
@@ -224,12 +196,43 @@ pub fn main(init: std.process.Init) !void {
         rl.clearBackground(BG);
         renderLcd(&cpu);
 
-        var buf: [128]u8 = undefined;
-        const status = std.fmt.bufPrintZ(&buf, "PC=0x{X:0>4}  cyc={d}  halted={}  frames={d}  xram_wr={d}", .{ cpu.pc, cycles, cpu.halted, frames, cpu.xram_write_count }) catch "??";
+        var buf: [256]u8 = undefined;
+        const status = std.fmt.bufPrintZ(&buf, "PC=0x{X:0>4} ext={X:0>2} sync={d} xram_wr={d}", .{ cpu.pc, cpu.pending_ext, cpu.sync_count, cpu.xram_write_count }) catch "??";
         rl.drawText(status, 4, win_h - 18, 14, rl.Color.white);
 
         rl.endDrawing();
         frames += 1;
+
+        if (frames == 10 or frames == 30 or frames == 100 or frames == 300) {
+            dbg.log("XRAM dump @ frame {d} xram_wr={d} xbnk={d}:", .{ frames, cpu.xram_write_count, cpu.sfr_raw[0x25] & 3 });
+            var nonzero: u32 = 0;
+            inline for (cpu.xram_banks.bank0) |b| {
+                if (b != 0) nonzero += 1;
+            }
+            inline for (cpu.xram_banks.bank1) |b| {
+                if (b != 0) nonzero += 1;
+            }
+            inline for (cpu.xram_banks.bank2) |b| {
+                if (b != 0) nonzero += 1;
+            }
+            dbg.log("  bank0[0..16]: {X:0>2} {X:0>2} {X:0>2} {X:0>2} {X:0>2} {X:0>2} {X:0>2} {X:0>2} {X:0>2} {X:0>2} {X:0>2} {X:0>2} {X:0>2} {X:0>2} {X:0>2} {X:0>2}", .{
+                cpu.xram_banks.bank0[0],  cpu.xram_banks.bank0[1],  cpu.xram_banks.bank0[2],  cpu.xram_banks.bank0[3],
+                cpu.xram_banks.bank0[4],  cpu.xram_banks.bank0[5],  cpu.xram_banks.bank0[6],  cpu.xram_banks.bank0[7],
+                cpu.xram_banks.bank0[8],  cpu.xram_banks.bank0[9],  cpu.xram_banks.bank0[10], cpu.xram_banks.bank0[11],
+                cpu.xram_banks.bank0[12], cpu.xram_banks.bank0[13], cpu.xram_banks.bank0[14], cpu.xram_banks.bank0[15],
+            });
+            dbg.log("  bank1[0..16]: {X:0>2} {X:0>2} {X:0>2} {X:0>2} {X:0>2} {X:0>2} {X:0>2} {X:0>2} {X:0>2} {X:0>2} {X:0>2} {X:0>2} {X:0>2} {X:0>2} {X:0>2} {X:0>2}", .{
+                cpu.xram_banks.bank1[0],  cpu.xram_banks.bank1[1],  cpu.xram_banks.bank1[2],  cpu.xram_banks.bank1[3],
+                cpu.xram_banks.bank1[4],  cpu.xram_banks.bank1[5],  cpu.xram_banks.bank1[6],  cpu.xram_banks.bank1[7],
+                cpu.xram_banks.bank1[8],  cpu.xram_banks.bank1[9],  cpu.xram_banks.bank1[10], cpu.xram_banks.bank1[11],
+                cpu.xram_banks.bank1[12], cpu.xram_banks.bank1[13], cpu.xram_banks.bank1[14], cpu.xram_banks.bank1[15],
+            });
+            dbg.log("  bank2[0..6]:  {X:0>2} {X:0>2} {X:0>2} {X:0>2} {X:0>2} {X:0>2}  nonzero={d}", .{
+                cpu.xram_banks.bank2[0], cpu.xram_banks.bank2[1], cpu.xram_banks.bank2[2],
+                cpu.xram_banks.bank2[3], cpu.xram_banks.bank2[4], cpu.xram_banks.bank2[5],
+                nonzero,
+            });
+        }
     }
 }
 
@@ -367,6 +370,22 @@ fn renderLcd(cpu: *Cpu) void {
             }
         }
     }
+
+    // Render bank 2 icon strip below the main LCD
+    // Bank 2: 6 bytes = 48 pixels wide, rendered as a single row
+    const icon_y: i32 = @intCast(LCD_H * SCALE + 4);
+    var x_byte: u32 = 0;
+    while (x_byte < 6) : (x_byte += 1) {
+        const byte = cpu.xram_banks.bank2[x_byte];
+        var bit: u3 = 7;
+        while (true) : (bit -%= 1) {
+            if (byte & (@as(u8, 1) << @intCast(bit)) != 0) {
+                const px: i32 = @intCast(x_byte * 8 + (7 - @as(u32, bit)));
+                rl.drawRectangle(px * SCALE, icon_y, SCALE, SCALE, FG);
+            }
+            if (bit == 0) break;
+        }
+    }
 }
 
 fn getXramByte(cpu: *Cpu, row: u32, byte_col: u32) u8 {
@@ -405,7 +424,7 @@ fn updateButtons(cpu: *Cpu) void {
     if (rl.isKeyDown(.n)) buttons &= ~@as(u8, 0x80); // P3.7 = Sleep
 
     if (buttons != cpu.p3_buttons) {
-        dbg.log("BUTTONS: {X:0>2} -> {X:0>2} (PC={X:0>4})", .{ cpu.p3_buttons, buttons, cpu.pc });
+        std.debug.print("BUTTONS: {X:0>2} -> {X:0>2} (PC={X:0>4})", .{ cpu.p3_buttons, buttons, cpu.pc });
     }
     cpu.p3_buttons = buttons;
 
@@ -419,6 +438,12 @@ fn updateButtons(cpu: *Cpu) void {
             cpu.sfr_raw[0x4E] = p3int;
         }
     }
+    // Reset $70 (Buttons_Current) on release so next press generates rising edge.
+    // P3 ISR edge formula: (~P3 XOR $70_old) AND ~P3 — needs $70_old=0x00 when released.
+    if (buttons == 0xFF) {
+        cpu.ram_bank0[0x70] = 0x00;
+    }
+
     // libevmu also clears HOLD mode here, but we don't implement HOLD yet
 }
 
