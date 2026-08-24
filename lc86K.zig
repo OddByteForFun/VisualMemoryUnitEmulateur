@@ -12,23 +12,6 @@ pub const Psw = packed struct(u8) {
 };
 
 pub const Cpu = struct {
-    pub const BiosPhase = enum(u8) {
-        none,
-        bios_init,
-        bios_clear_ram,
-        bios_post_init,
-        bios_date_wait,
-        bios_lcd_setup,
-        bios_date_ok,
-        bios_main_loop,
-        bios_mode_0,
-        bios_mode_1,
-        bios_mode_2,
-        bios_game_launch,
-        bios_no_game,
-        game_running,
-    };
-
     // Banque d'instructions (64KB, 3 banks : ROM / Flash0 / Flash1)
     inst_bank: struct {
         data: []u8,
@@ -85,16 +68,13 @@ pub const Cpu = struct {
     p3_buttons: u8 = 0xFF, // état physique des boutons (active-low, 1=relâché)
     prev_p3_buttons: u8 = 0xFF, // état précédent pour détection de front (edge mode)
 
-    // diagnostic
+    // Compteurs d'événements matériels (instrumentation ; incrémentés au
+    // cœur des chemins store8/VTRBF/sync — les sortir de Cpu imposerait une
+    // dépendance lc86K→debug, interdite par l'architecture).
     xram_write_count: u32 = 0,
     vtrbf_write_count: u32 = 0,
-    p3_read_count: u32 = 0,
-    maple_irq_pending: bool = false, // IRQ 9 (Maple RFB) pending flag
-    bios_phase: BiosPhase = .none,
-    bios_phase_seen: [13]bool = @splat(false), // track which phases have been seen
-    ext_write_pc: u16 = 0, // PC of last EXT SFR write
     sync_count: u32 = 0, // how many times syncInstructionBank was called
-    last_sync_bank: enum { rom, flash0, flash1 } = .rom,
+    maple_irq_pending: bool = false, // IRQ 9 (Maple RFB) pending flag
 
     pub fn init(rom: []u8) Cpu {
         var cpu = Cpu{
@@ -180,18 +160,15 @@ pub const Cpu = struct {
                 // Ext0 = 1 → FlashBank0
                 self.inst_bank.data = self.flash[0..65536];
                 self.inst_bank.bank_id = .flash0;
-                self.last_sync_bank = .flash0;
             } else {
                 // Ext0 = 0 → ROM
                 self.inst_bank.data = self.rom_data;
                 self.inst_bank.bank_id = .rom;
-                self.last_sync_bank = .rom;
             }
         } else {
             // Ext3 = 0 → FlashBank1
             self.inst_bank.data = self.flash[65536..131072];
             self.inst_bank.bank_id = .flash1;
-            self.last_sync_bank = .flash1;
         }
     }
 
@@ -542,46 +519,6 @@ pub const Cpu = struct {
         };
     }
 
-    pub fn checkBiosPhase(self: *Cpu) ?BiosPhase {
-        if (self.inst_bank.bank_id != .rom) {
-            if (self.bios_phase != .game_running) {
-                self.bios_phase = .game_running;
-                return .game_running;
-            }
-            return null;
-        }
-        const new_phase: ?BiosPhase = switch (self.pc) {
-            0x0200 => .bios_init,
-            0x024C => .bios_clear_ram,
-            0x0294 => .bios_post_init,
-            0x02AF => .bios_date_wait,
-            0x02C2 => .bios_lcd_setup,
-            0x02EF => .bios_date_ok,
-            0x0317 => .bios_main_loop,
-            0x033A => .bios_mode_0,
-            0x0360 => .bios_mode_1,
-            0x0387 => .bios_mode_2,
-            0x03AE => .bios_game_launch,
-            0x03E1 => .bios_no_game,
-            else => null,
-        };
-        if (new_phase) |phase| {
-            if (self.bios_phase != phase) {
-                std.debug.print("PHASE CHANGE: {} -> {} PC={X:0>4} xram_wr={d} vtrbf_wr={d}\n", .{
-                    self.bios_phase, phase, self.pc, self.xram_write_count, self.vtrbf_write_count,
-                });
-                self.bios_phase = phase;
-                const idx = @intFromEnum(phase);
-                const seen = &self.bios_phase_seen;
-                if (idx < seen.len and !seen[idx]) {
-                    seen[idx] = true;
-                    return phase;
-                }
-            }
-        }
-        return null;
-    }
-
     // il s'agit de définir les offsets utilisés par load8 qui ajoute 0x100 à ces valeurs.
 
     const SFR_ACC: u7 = 0x00;
@@ -695,7 +632,6 @@ pub const Cpu = struct {
             SFR_T1L => self.t1l_counter,
             SFR_T1H => self.t1h_counter,
             SFR_P3 => {
-                self.p3_read_count += 1;
                 return self.p3_buttons;
             },
             SFR_VTRBF => {
@@ -814,7 +750,6 @@ pub const Cpu = struct {
                 }
             },
             SFR_EXT => {
-                self.ext_write_pc = self.pc;
                 self.pending_ext = val;
             },
 

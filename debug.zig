@@ -108,6 +108,76 @@ fn decodeD9Addr(opcode: u8, val: u8) u16 {
     return isa.decodeD9(opcode, val);
 }
 
+// ── Suivi de phase BIOS (diagnostic) ──────────────────────
+// Anciennement Cpu.checkBiosPhase : sorti du cœur (AD-8). Les PC sont ceux
+// du BIOS officiel (vmu_bios_jp.bin) — pure heuristique d'observation,
+// aucune sémantique d'exécution.
+pub const BiosPhase = enum(u8) {
+    none,
+    bios_init,
+    bios_clear_ram,
+    bios_post_init,
+    bios_date_wait,
+    bios_lcd_setup,
+    bios_date_ok,
+    bios_main_loop,
+    bios_mode_0,
+    bios_mode_1,
+    bios_mode_2,
+    bios_game_launch,
+    bios_no_game,
+    game_running,
+};
+
+var bios_phase: BiosPhase = .none;
+var bios_phase_seen: [13]bool = @splat(false);
+
+pub fn checkBiosPhase(cpu: *Cpu) ?BiosPhase {
+    if (cpu.inst_bank.bank_id != .rom) {
+        if (bios_phase != .game_running) {
+            bios_phase = .game_running;
+            reportBiosPhase(.game_running, cpu);
+            return .game_running;
+        }
+        return null;
+    }
+    const new_phase: ?BiosPhase = switch (cpu.pc) {
+        0x0200 => .bios_init,
+        0x024C => .bios_clear_ram,
+        0x0294 => .bios_post_init,
+        0x02AF => .bios_date_wait,
+        0x02C2 => .bios_lcd_setup,
+        0x02EF => .bios_date_ok,
+        0x0317 => .bios_main_loop,
+        0x033A => .bios_mode_0,
+        0x0360 => .bios_mode_1,
+        0x0387 => .bios_mode_2,
+        0x03AE => .bios_game_launch,
+        0x03E1 => .bios_no_game,
+        else => null,
+    };
+    if (new_phase) |phase| {
+        if (bios_phase != phase) {
+            std.debug.print("PHASE CHANGE: {} -> {} PC={X:0>4} xram_wr={d} vtrbf_wr={d}\n", .{
+                bios_phase, phase, cpu.pc, cpu.xram_write_count, cpu.vtrbf_write_count,
+            });
+            bios_phase = phase;
+            const idx = @intFromEnum(phase);
+            if (idx < bios_phase_seen.len and !bios_phase_seen[idx]) {
+                bios_phase_seen[idx] = true;
+                reportBiosPhase(phase, cpu);
+                return phase;
+            }
+        }
+    }
+    return null;
+}
+
+fn reportBiosPhase(phase: BiosPhase, cpu: *Cpu) void {
+    std.debug.print("[BIOS] Phase: {s} (PC=0x{X:0>4})\n", .{ @tagName(phase), cpu.pc });
+    log("[BIOS] Phase: {s} (PC=0x{X:0>4})", .{ @tagName(phase), cpu.pc });
+}
+
 pub fn disassembleAt(cpu: *Cpu, buf: []u8, pc: u16) usize {
     const rom = cpu.inst_bank.data;
     if (pc >= rom.len) return 0;

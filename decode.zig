@@ -417,10 +417,7 @@ pub fn step(cpu: *Cpu) u8 {
     cpu.tickTimers(used);
     cpu.requestLevelDrivenInterrupts();
     cpu.servicePendingInterrupt();
-    if (cpu.checkBiosPhase()) |phase| {
-        std.debug.print("[BIOS] Phase: {s} (PC=0x{X:0>4})\n", .{ @tagName(phase), cpu.pc });
-        dbg.log("[BIOS] Phase: {s} (PC=0x{X:0>4})", .{ @tagName(phase), cpu.pc });
-    }
+    _ = dbg.checkBiosPhase(cpu);
 
     if (cpu.halted and dec.inst != .nop) {
         if (dbg.log_level == .trace) {
