@@ -558,14 +558,14 @@ pub const Cpu = struct {
     pub const SFR_VCCR: u7 = 0x27; // LCD contrast/power control
 
     // Octet qui compose T0CNT
-    const T0CNT_T0HRUN: u8 = 0x80;
-    const T0CNT_T0LRUN: u8 = 0x40;
-    const T0CNT_T0LONG: u8 = 0x20;
-    const T0CNT_T0LEXT: u8 = 0x10;
-    const T0CNT_T0HOVF: u8 = 0x08; // utilisé pour les interruptions mode 0
-    const T0CNT_T0HIE: u8 = 0x04; // T0H interrupt request enabled
-    const T0CNT_T0LOVF: u8 = 0x02; // utilisé pour les interruptions mode 0
-    const T0CNT_T0LIE: u8 = 0x01; // T0L interrupt request enabled
+    pub const T0CNT_T0HRUN: u8 = 0x80;
+    pub const T0CNT_T0LRUN: u8 = 0x40;
+    pub const T0CNT_T0LONG: u8 = 0x20;
+    pub const T0CNT_T0LEXT: u8 = 0x10;
+    pub const T0CNT_T0HOVF: u8 = 0x08; // utilisé pour les interruptions mode 0
+    pub const T0CNT_T0HIE: u8 = 0x04; // T0H interrupt request enabled
+    pub const T0CNT_T0LOVF: u8 = 0x02; // utilisé pour les interruptions mode 0
+    pub const T0CNT_T0LIE: u8 = 0x01; // T0L interrupt request enabled
 
     // Timer 1 — SFR offsets (0x118-0x11D → offset - 0x100)
     pub const SFR_T1CNT: u7 = 0x18; // control, flags, enables
@@ -575,29 +575,29 @@ pub const Cpu = struct {
     pub const SFR_T1H: u7 = 0x1D; // high counter (read) / T1HR reload (write)
 
     // P3INT bits
-    const P3INT_P30INT: u8 = 0x01; // bit 0: interrupt request enable
-    const P3INT_P31INT: u8 = 0x02; // bit 1: interrupt source flag (set when LOW detected)
-    const P3INT_P32INT: u8 = 0x04; // bit 2: interrupt generation enable
+    pub const P3INT_P30INT: u8 = 0x01; // bit 0: interrupt request enable
+    pub const P3INT_P31INT: u8 = 0x02; // bit 1: interrupt source flag (set when LOW detected)
+    pub const P3INT_P32INT: u8 = 0x04; // bit 2: interrupt generation enable
 
     // T1CNT bits
-    const T1CNT_T1HRUN: u8 = 0x80; // T1H count control
-    const T1CNT_T1LRUN: u8 = 0x40; // T1L count control
-    const T1CNT_T1LONG: u8 = 0x20; // 0=mode 0/1 (8-bit), 1=mode 2/3 (16-bit)
-    const T1CNT_T1HOVF: u8 = 0x08; // T1H overflow flag
-    const T1CNT_T1HIE: u8 = 0x04; // T1H interrupt request enable
-    const T1CNT_T1LOVF: u8 = 0x02; // T1L overflow flag
-    const T1CNT_T1LIE: u8 = 0x01; // T1L interrupt request enable
+    pub const T1CNT_T1HRUN: u8 = 0x80; // T1H count control
+    pub const T1CNT_T1LRUN: u8 = 0x40; // T1L count control
+    pub const T1CNT_T1LONG: u8 = 0x20; // 0=mode 0/1 (8-bit), 1=mode 2/3 (16-bit)
+    pub const T1CNT_T1HOVF: u8 = 0x08; // T1H overflow flag
+    pub const T1CNT_T1HIE: u8 = 0x04; // T1H interrupt request enable
+    pub const T1CNT_T1LOVF: u8 = 0x02; // T1L overflow flag
+    pub const T1CNT_T1LIE: u8 = 0x01; // T1L interrupt request enable
 
     // Base Timer
     pub const SFR_BTCR: u7 = 0x7F; // gestion notamment des interruptions du base timer
-    const BTCR_BT0_IE: u8 = 0x01; // bit 0: BT0 request enable
-    const BTCR_BT0_FLAG: u8 = 0x02; // bit 1: BT0 source flag
-    const BTCR_BT1_IE: u8 = 0x04; // bit 2: BT1 request enable
-    const BTCR_BT1_FLAG: u8 = 0x08; // bit 3: BT1 source flag
-    const BTCR_BT1_CYCLE_LO: u8 = 0x10; // bit 4: BT1 cycle control low
-    const BTCR_BT1_CYCLE_HI: u8 = 0x20; // bit 5: BT1 cycle control high
-    const BTCR_BT_RUN: u8 = 0x40; // bit 6: base timer start/stop
-    const BTCR_BT0_CYCLE: u8 = 0x80; // bit 7: BT0 cycle control (0: 16384/fBST, 1: 64/fBST fast-forward)
+    pub const BTCR_BT0_IE: u8 = 0x01; // bit 0: BT0 request enable
+    pub const BTCR_BT0_FLAG: u8 = 0x02; // bit 1: BT0 source flag
+    pub const BTCR_BT1_IE: u8 = 0x04; // bit 2: BT1 request enable
+    pub const BTCR_BT1_FLAG: u8 = 0x08; // bit 3: BT1 source flag
+    pub const BTCR_BT1_CYCLE_LO: u8 = 0x10; // bit 4: BT1 cycle control low
+    pub const BTCR_BT1_CYCLE_HI: u8 = 0x20; // bit 5: BT1 cycle control high
+    pub const BTCR_BT_RUN: u8 = 0x40; // bit 6: base timer start/stop
+    pub const BTCR_BT0_CYCLE: u8 = 0x80; // bit 7: BT0 cycle control (0: 16384/fBST, 1: 64/fBST fast-forward)
 
     // fBST = 32768 Hz quartz. CPU ≈ 6 MHz. 1 tick fBST ≈ 183 cycles CPU.
     const CPU_FREQ: u32 = 6_000_000;

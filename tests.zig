@@ -1091,3 +1091,223 @@ test "initBiosRtc : état attendu par le BIOS" {
     try testing.expectEqual(@as(u8, 0xC0), cpu.sfr_raw[Cpu.SFR_ISL]);
     try testing.expectEqual(@as(u8, 0x41), cpu.sfr_raw[Cpu.SFR_BTCR]);
 }
+
+// ── Interruptions / Timers / HALT ─────────────────────────
+// Verrouille le comportement de servicePendingInterrupt(), des timers Mode 0
+// et du réveil HALT avant d'empiler les périphériques P1 par-dessus.
+
+/// Réarme les verrous internes pour servir l'IRQ suivante (comme après RETI).
+fn allowNextIrq(cpu: *Cpu) void {
+    cpu.interrupt_depth = 0;
+    cpu.process_this_instr = true;
+}
+
+test "IRQ : EA=0 bloque tout service" {
+    var rom: [65536]u8 = undefined;
+    var cpu = makeCpu(&rom);
+    // Écritures directes : pas de période interrupt_blocked (déclenchée seulement via storeSFR).
+    cpu.sfr_raw[Cpu.SFR_IE] = 0x00; // EA=0
+    cpu.sfr_raw[Cpu.SFR_T0CNT] = Cpu.T0CNT_T0LOVF | Cpu.T0CNT_T0LIE;
+
+    cpu.servicePendingInterrupt();
+
+    try testing.expectEqual(@as(u16, 0x0000), cpu.pc);
+    try testing.expectEqual(@as(u8, 0), cpu.interrupt_depth);
+    try testing.expectEqual(Cpu.T0CNT_T0LOVF | Cpu.T0CNT_T0LIE, cpu.sfr_raw[Cpu.SFR_T0CNT]); // flag intact
+}
+
+test "IRQ : priorité int2 > int3 > t0h > t1" {
+    var rom: [65536]u8 = undefined;
+    var cpu = makeCpu(&rom);
+    cpu.sfr_raw[Cpu.SFR_IE] = 0x80; // écriture directe, EA seul suffit ici
+    // Toutes les sources actives simultanément.
+    cpu.sfr_raw[Cpu.SFR_T0CNT] = Cpu.T0CNT_T0LOVF | Cpu.T0CNT_T0LIE |
+        Cpu.T0CNT_T0HOVF | Cpu.T0CNT_T0HIE;
+    cpu.sfr_raw[Cpu.SFR_BTCR] = Cpu.BTCR_BT0_FLAG | Cpu.BTCR_BT0_IE |
+        Cpu.BTCR_BT1_FLAG | Cpu.BTCR_BT1_IE;
+    cpu.sfr_raw[Cpu.SFR_T1CNT] = Cpu.T1CNT_T1HOVF | Cpu.T1CNT_T1HIE |
+        Cpu.T1CNT_T1LOVF | Cpu.T1CNT_T1LIE;
+
+    cpu.servicePendingInterrupt(); // int2 gagne
+    try testing.expectEqual(@as(u16, 0x0013), cpu.pc);
+    // Seul le flag T0LOVF est effacé ; les bits enable restent posés.
+    try testing.expectEqual(Cpu.T0CNT_T0HOVF | Cpu.T0CNT_T0HIE | Cpu.T0CNT_T0LIE, cpu.sfr_raw[Cpu.SFR_T0CNT]);
+
+    allowNextIrq(&cpu);
+    cpu.servicePendingInterrupt(); // int3 ensuite
+    try testing.expectEqual(@as(u16, 0x001B), cpu.pc);
+
+    allowNextIrq(&cpu);
+    cpu.servicePendingInterrupt(); // t0h ensuite
+    try testing.expectEqual(@as(u16, 0x0023), cpu.pc);
+    const t0cnt_left = cpu.sfr_raw[Cpu.SFR_T0CNT];
+    try testing.expectEqual(@as(u8, 0), t0cnt_left & (Cpu.T0CNT_T0LOVF | Cpu.T0CNT_T0HOVF));
+
+    allowNextIrq(&cpu);
+    cpu.servicePendingInterrupt(); // t1 en dernier
+    try testing.expectEqual(@as(u16, 0x002B), cpu.pc);
+    const t1cnt_left = cpu.sfr_raw[Cpu.SFR_T1CNT];
+    try testing.expectEqual(@as(u8, 0), t1cnt_left & (Cpu.T1CNT_T1LOVF | Cpu.T1CNT_T1HOVF));
+}
+
+test "IRQ : push PC/SP et saut au vecteur" {
+    var rom: [65536]u8 = undefined;
+    var cpu = makeCpu(&rom);
+    cpu.pc = 0x1234;
+    cpu.sfr_raw[Cpu.SFR_T0CNT] = Cpu.T0CNT_T0LOVF | Cpu.T0CNT_T0LIE;
+
+    cpu.servicePendingInterrupt();
+
+    try testing.expectEqual(@as(u8, 0x81), cpu.sp);
+    try testing.expectEqual(@as(u8, 0x34), cpu.ram_bank0[0x80]); // PC bas poussé premier
+    try testing.expectEqual(@as(u8, 0x12), cpu.ram_bank0[0x81]);
+    try testing.expectEqual(@as(u16, 0x0013), cpu.pc);
+    try testing.expectEqual(@as(u8, 1), cpu.interrupt_depth);
+    try testing.expect(!cpu.halted);
+}
+
+test "IRQ : blocage un cycle après écriture IE/IP" {
+    var rom: [65536]u8 = undefined;
+    var cpu = makeCpu(&rom);
+    cpu.sfr_raw[Cpu.SFR_T0CNT] = Cpu.T0CNT_T0LOVF | Cpu.T0CNT_T0LIE;
+
+    cpu.storeSFR(Cpu.SFR_IE, 0xFF); // déclenche interrupt_blocked=1
+
+    cpu.servicePendingInterrupt(); // consommé par la période de blocage
+    try testing.expectEqual(@as(u16, 0x0000), cpu.pc);
+    try testing.expectEqual(Cpu.T0CNT_T0LOVF | Cpu.T0CNT_T0LIE, cpu.sfr_raw[Cpu.SFR_T0CNT]);
+
+    cpu.servicePendingInterrupt(); // servi au cycle suivant
+    try testing.expectEqual(@as(u16, 0x0013), cpu.pc);
+}
+
+test "RETI : retour + réautorisation avec skip libevmu" {
+    var rom: [65536]u8 = undefined;
+    var cpu = makeCpu(&rom);
+    rom[0x13] = 0xB0; // RETI (opcode 0xB0) à l'entrée de l'ISR int2
+    cpu.sfr_raw[Cpu.SFR_T0CNT] = Cpu.T0CNT_T0LOVF | Cpu.T0CNT_T0LIE;
+
+    cpu.servicePendingInterrupt(); // entre dans l'ISR (retour prévu à 0x0000)
+    try testing.expectEqual(@as(u16, 0x0013), cpu.pc);
+
+    _ = step(&cpu); // RETI : pop PC, depth=0 ; le dispatch de fin de step
+    // consomme lui-même le skip post-RETI libevmu (process_this_instr).
+    try testing.expectEqual(@as(u16, 0x0000), cpu.pc);
+    try testing.expectEqual(@as(u8, 0), cpu.interrupt_depth);
+
+    cpu.sfr_raw[Cpu.SFR_T0CNT] |= Cpu.T0CNT_T0LOVF; // IRQ re-pendante immédiatement
+
+    // depth=0 et process réarmé : la prochaine invocation sert directement.
+    cpu.servicePendingInterrupt();
+    try testing.expectEqual(@as(u16, 0x0013), cpu.pc);
+}
+
+test "IRQ : p3 derrière les timers, maple derrière p3" {
+    var rom: [65536]u8 = undefined;
+    var cpu = makeCpu(&rom);
+    cpu.sfr_raw[Cpu.SFR_T0CNT] = Cpu.T0CNT_T0LOVF | Cpu.T0CNT_T0LIE;
+    cpu.sfr_raw[Cpu.SFR_P3INT] = Cpu.P3INT_P30INT | Cpu.P3INT_P31INT;
+    cpu.maple_irq_pending = true;
+
+    cpu.servicePendingInterrupt(); // timer d'abord
+    try testing.expectEqual(@as(u16, 0x0013), cpu.pc);
+
+    allowNextIrq(&cpu);
+    cpu.sfr_raw[Cpu.SFR_T0CNT] = 0; // plus de source timer
+    cpu.servicePendingInterrupt(); // p3 ensuite
+    try testing.expectEqual(@as(u16, 0x004B), cpu.pc);
+    try testing.expectEqual(Cpu.P3INT_P31INT, cpu.sfr_raw[Cpu.SFR_P3INT] & Cpu.P3INT_P31INT); // source maintenue
+
+    // L'ISR doit effacer P31INT elle-même, sinon p3 est resservie en boucle.
+    cpu.sfr_raw[Cpu.SFR_P3INT] &= ~Cpu.P3INT_P31INT;
+    allowNextIrq(&cpu);
+    cpu.servicePendingInterrupt(); // maple en dernier
+    try testing.expectEqual(@as(u16, 0x0043), cpu.pc);
+    try testing.expect(!cpu.maple_irq_pending);
+}
+
+test "Timer 0 Mode 0 : overflow T0L, reload et flag" {
+    var rom: [65536]u8 = undefined;
+    var cpu = makeCpu(&rom);
+    // Prescaler : période = 256 - T0PRR (= 1 cycle, comme libevmu tscale=256-T0PRR).
+    cpu.sfr_raw[Cpu.SFR_T0PRR] = 0xFF;
+    cpu.sfr_raw[Cpu.SFR_T0LR] = 0x10;
+    cpu.t0l_counter = 0xFE;
+    cpu.sfr_raw[Cpu.SFR_T0CNT] = Cpu.T0CNT_T0LRUN;
+
+    cpu.tickTimers(1);
+    try testing.expectEqual(@as(u8, 0xFF), cpu.t0l_counter);
+    try testing.expectEqual(@as(u8, 0), cpu.sfr_raw[Cpu.SFR_T0CNT] & Cpu.T0CNT_T0LOVF);
+
+    cpu.tickTimers(1);
+    try testing.expectEqual(@as(u8, 0x10), cpu.t0l_counter); // reload depuis T0LR
+    try testing.expectEqual(Cpu.T0CNT_T0LOVF, cpu.sfr_raw[Cpu.SFR_T0CNT] & Cpu.T0CNT_T0LOVF);
+}
+
+test "Timer 0 Mode 0 : T0H indépendant de T0L" {
+    var rom: [65536]u8 = undefined;
+    var cpu = makeCpu(&rom);
+    cpu.sfr_raw[Cpu.SFR_T0PRR] = 0xFF;
+    cpu.sfr_raw[Cpu.SFR_T0HR] = 0x05;
+    cpu.t0h_counter = 0xFF;
+    cpu.t0l_counter = 0x42;
+    cpu.sfr_raw[Cpu.SFR_T0CNT] = Cpu.T0CNT_T0HRUN; // T0L arrêté
+
+    cpu.tickTimers(1);
+    try testing.expectEqual(@as(u8, 0x05), cpu.t0h_counter); // overflow + reload
+    try testing.expectEqual(Cpu.T0CNT_T0HOVF, cpu.sfr_raw[Cpu.SFR_T0CNT] & Cpu.T0CNT_T0HOVF);
+    try testing.expectEqual(@as(u8, 0x42), cpu.t0l_counter); // intact
+}
+
+test "Timer 0 Mode 0 : écriture T0CNT sans RUN recharge depuis T0LR/T0HR" {
+    var rom: [65536]u8 = undefined;
+    var cpu = makeCpu(&rom);
+    cpu.t0l_counter = 0x99;
+    cpu.sfr_raw[Cpu.SFR_T0LR] = 0x11;
+    cpu.t0h_counter = 0x88;
+    cpu.sfr_raw[Cpu.SFR_T0HR] = 0x22;
+
+    cpu.storeSFR(Cpu.SFR_T0CNT, 0); // aucun bit RUN → reload des deux compteurs
+
+    try testing.expectEqual(@as(u8, 0x11), cpu.t0l_counter);
+    try testing.expectEqual(@as(u8, 0x22), cpu.t0h_counter);
+}
+
+test "HALT : entrée PCON puis réveil par interruption Timer 0" {
+    var rom: [65536]u8 = undefined;
+    var cpu = makeCpu(&rom);
+    // Prescaler à période 1 pour que l'overflow arrive en 2 cycles.
+    cpu.sfr_raw[Cpu.SFR_T0PRR] = 0xFF;
+    cpu.sfr_raw[Cpu.SFR_T0LR] = 0xFE;
+    cpu.t0l_counter = 0xFE;
+    cpu.sfr_raw[Cpu.SFR_T0CNT] = Cpu.T0CNT_T0LRUN | Cpu.T0CNT_T0LIE;
+    // MOV #01H,PCON (espace SFR : opcode 0x23) → halt pendant le step.
+    // Avec un prescaler à période 1, l'overflow peut survenir dès ce même step
+    // (2 cycles) : on ne suppose donc pas halted ici.
+    rom[0] = 0x23; rom[1] = 0x07; rom[2] = 0x01;
+
+    _ = step(&cpu);
+
+    var n: usize = 0;
+    while (cpu.halted and n < 100) : (n += 1) _ = step(&cpu);
+    try testing.expect(!cpu.halted); // réveillé par l'IRQ int2 (libevmu : HALT bit de PCON effacé au service)
+    try testing.expectEqual(@as(u16, 0x0013), cpu.pc); // ISR directement
+    try testing.expectEqual(@as(u8, 1), cpu.interrupt_depth);
+    try testing.expectEqual(@as(u8, 0), cpu.sfr_raw[Cpu.SFR_T0CNT] & Cpu.T0CNT_T0LOVF);
+}
+
+test "HALT : réveil par interruption P3 (vecteur 0x004B)" {
+    var rom: [65536]u8 = undefined;
+    var cpu = makeCpu(&rom);
+    // Sémantique libevmu : bouton pressé + P32INT → P31INT posé ; P30INT → IRQ servie.
+    cpu.sfr_raw[Cpu.SFR_P3INT] = Cpu.P3INT_P32INT | Cpu.P3INT_P31INT | Cpu.P3INT_P30INT;
+    cpu.halted = true;
+
+    var n: usize = 0;
+    while (cpu.halted and n < 100) : (n += 1) _ = step(&cpu);
+
+    try testing.expect(!cpu.halted); // réveillé par l'IRQ p3
+    try testing.expectEqual(@as(u16, 0x004B), cpu.pc); // ISR directement
+    try testing.expectEqual(@as(u8, 1), cpu.interrupt_depth);
+    try testing.expectEqual(Cpu.P3INT_P31INT, cpu.sfr_raw[Cpu.SFR_P3INT] & Cpu.P3INT_P31INT); // source maintenue
+}
