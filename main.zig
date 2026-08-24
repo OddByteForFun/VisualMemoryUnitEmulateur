@@ -172,7 +172,7 @@ pub fn main(init: std.process.Init) !void {
         frames += 1;
 
         if (frames == 10 or frames == 30 or frames == 100 or frames == 300) {
-            dbg.log("XRAM dump @ frame {d} xram_wr={d} xbnk={d}:", .{ frames, cpu.xram_write_count, cpu.sfr_raw[0x25] & 3 });
+            dbg.log("XRAM dump @ frame {d} xram_wr={d} xbnk={d}:", .{ frames, cpu.xram_write_count, cpu.sfr_raw[Cpu.SFR_XBNK] & 3 });
             var nonzero: u32 = 0;
             inline for (cpu.xram_banks.bank0) |b| {
                 if (b != 0) nonzero += 1;
@@ -280,13 +280,13 @@ fn updateButtons(cpu: *Cpu) void {
     cpu.p3_buttons = buttons;
 
     // libevmu EvmuGamepad_pollButtons_: once per frame, set P31INT if button pressed
-    var p3int = cpu.sfr_raw[0x4E]; // P3INT
+    var p3int = cpu.sfr_raw[Cpu.SFR_P3INT];
     const p32int = p3int & 0x04 != 0; // P32INT: 1=continuous, 0=edge
 
     if (buttons != 0xFF) { // any button pressed
         if (p32int) { // continuous mode
             p3int |= 0x02; // set P31INT source flag
-            cpu.sfr_raw[0x4E] = p3int;
+            cpu.sfr_raw[Cpu.SFR_P3INT] = p3int;
         }
     }
     // Reset $70 (Buttons_Current) on release so next press generates rising edge.

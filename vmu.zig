@@ -148,18 +148,18 @@ pub fn initBiosRtc(cpu: *Cpu) void {
     cpu.ram_bank0[0x31] = 0xFF;
 
     // SFR initialization matching libevmu's EvmuRam_IBehavior_reset_() in evmu_ram.c
-    cpu.sfr_raw[0x07] = 0x00; // PCON: disable HALT/HOLD
-    cpu.sfr_raw[0x08] = 0xFF; // IE: all interrupts enabled (EA=1 + all individual)
-    cpu.sfr_raw[0x09] = 0x00; // IP: no priority (default)
-    cpu.sfr_raw[0x0E] = 0xA3; // OCR: quartz selected (10), RC stopped (1), CF stopped (1), /6 (1)
-    cpu.sfr_raw[0x20] = 0x08; // MCR: LCD update enable (bit3)
-    cpu.sfr_raw[0x27] = 0x80; // VCCR: LCD on (bit7)
-    cpu.sfr_raw[0x45] = 0xFF; // P1DDR: all output
-    cpu.sfr_raw[0x46] = 0xBF; // P1FCR: port 1 function control
-    cpu.sfr_raw[0x4D] = 0x00; // P3DDR: all input
-    cpu.sfr_raw[0x4E] = 0xFD; // P3INT: P30INT=1 (enable), P31INT=0, P32INT=1 (continuous)
-    cpu.sfr_raw[0x5C] = 0x02; // P7: P71 mask
-    cpu.sfr_raw[0x5F] = 0xC0; // ISL: base timer clock = quartz oscillator
-    cpu.sfr_raw[0x63] = 0xFC; // VSEL: default value
-    cpu.sfr_raw[0x7F] = 0x41; // BTCR: BT_INT0_SRC=quartz, BT_INT0_IE=1
+    cpu.sfr_raw[Cpu.SFR_PCON] = 0x00; // PCON: disable HALT/HOLD
+    cpu.sfr_raw[Cpu.SFR_IE] = 0xFF; // IE: all interrupts enabled (EA=1 + all individual)
+    cpu.sfr_raw[Cpu.SFR_IP] = 0x00; // IP: no priority (default)
+    cpu.sfr_raw[Cpu.SFR_OCR] = 0xA3; // OCR: quartz selected (10), RC stopped (1), CF stopped (1), /6 (1)
+    cpu.sfr_raw[Cpu.SFR_MCR] = 0x08; // MCR: LCD update enable (bit3)
+    cpu.sfr_raw[Cpu.SFR_VCCR] = 0x80; // VCCR: LCD on (bit7)
+    cpu.sfr_raw[Cpu.SFR_P1DDR] = 0xFF; // P1DDR: all output
+    cpu.sfr_raw[Cpu.SFR_P1FCR] = 0xBF; // P1FCR: port 1 function control
+    cpu.sfr_raw[Cpu.SFR_P3DDR] = 0x00; // P3DDR: all input
+    cpu.sfr_raw[Cpu.SFR_P3INT] = 0xFD; // P3INT: P30INT=1 (enable), P31INT=0, P32INT=1 (continuous)
+    cpu.sfr_raw[Cpu.SFR_P7] = 0x02; // P7: P71 mask
+    cpu.sfr_raw[Cpu.SFR_ISL] = 0xC0; // ISL: base timer clock = quartz oscillator
+    cpu.sfr_raw[Cpu.SFR_VSEL] = 0xFC; // VSEL: default value
+    cpu.sfr_raw[Cpu.SFR_BTCR] = 0x41; // BTCR: BT_INT0_SRC=quartz, BT_INT0_IE=1
 }

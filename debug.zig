@@ -307,7 +307,7 @@ pub fn formatCpuState(cpu: *Cpu, buf: []u8) usize {
         cpu.c,
         cpu.sp,
         @as(u8, @bitCast(cpu.psw)),
-        cpu.sfr_raw[0x08],
+        cpu.sfr_raw[Cpu.SFR_IE],
         if (cpu.halted) "YES" else "no",
         cpu.interrupt_depth,
     }) catch return buf.len;
@@ -316,13 +316,13 @@ pub fn formatCpuState(cpu: *Cpu, buf: []u8) usize {
 
 pub fn formatSfrState(cpu: *Cpu, buf: []u8) usize {
     const msg = std.fmt.bufPrint(buf, "T0CNT={X:0>2} T0L={X:0>2} T0H={X:0>2} T1CNT={X:0>2} T1L={X:0>2} T1H={X:0>2} BTCR={X:0>2} P3={X:0>2}", .{
-        cpu.sfr_raw[0x4E],
+        cpu.sfr_raw[Cpu.SFR_P3INT],
         cpu.t0l_counter,
         cpu.t0h_counter,
-        cpu.sfr_raw[0x18],
+        cpu.sfr_raw[Cpu.SFR_T1CNT],
         cpu.t1l_counter,
         cpu.t1h_counter,
-        cpu.sfr_raw[0x7F],
+        cpu.sfr_raw[Cpu.SFR_BTCR],
         cpu.p3_buttons,
     }) catch return buf.len;
     return msg.len;

@@ -42,7 +42,7 @@ pub fn step(cpu: *Cpu) u8 {
         if (cpu.halted and cpu.p3_buttons != old_p3) {
             if (dbg.log_level == .trace) {
                 dbg.log("P3 WAKEUP: P3={X:0>2}->{X:0>2} PC={X:0>4} P3INT={X:0>2}", .{
-                    old_p3, cpu.p3_buttons, cpu.pc, cpu.sfr_raw[0x4E],
+                    old_p3, cpu.p3_buttons, cpu.pc, cpu.sfr_raw[Cpu.SFR_P3INT],
                 });
             }
             cpu.halted = false;
@@ -50,13 +50,13 @@ pub fn step(cpu: *Cpu) u8 {
 
         if (cpu.p3_buttons != old_p3 or dbg.halt_sample == 0) {
             if (dbg.log_level == .trace) {
-                const p3int = cpu.sfr_raw[0x4E];
+                const p3int = cpu.sfr_raw[Cpu.SFR_P3INT];
                 dbg.log("HALT PC={X:0>4} P3={X:0>2}->{X:0>2} P3INT={X:0>2} IE={X:0>2} depth={d} blocked={d} halted={}", .{
                     cpu.pc,
                     old_p3,
                     cpu.p3_buttons,
                     p3int,
-                    cpu.sfr_raw[0x08],
+                    cpu.sfr_raw[Cpu.SFR_IE],
                     cpu.interrupt_depth,
                     cpu.interrupt_blocked,
                     cpu.halted,
@@ -423,11 +423,11 @@ pub fn step(cpu: *Cpu) u8 {
         if (dbg.log_level == .trace) {
             dbg.log(">>> HALT at PC={X:0>4} IE={X:0>2} BTCR={X:0>2} T0CNT={X:0>2} T1CNT={X:0>2} P3INT={X:0>2} P3={X:0>2} prevP3={X:0>2}", .{
                 cpu.pc,
-                cpu.sfr_raw[0x08],
-                cpu.sfr_raw[0x7F],
-                cpu.sfr_raw[0x10],
-                cpu.sfr_raw[0x18],
-                cpu.sfr_raw[0x4E],
+                cpu.sfr_raw[Cpu.SFR_IE],
+                cpu.sfr_raw[Cpu.SFR_BTCR],
+                cpu.sfr_raw[Cpu.SFR_T0CNT],
+                cpu.sfr_raw[Cpu.SFR_T1CNT],
+                cpu.sfr_raw[Cpu.SFR_P3INT],
                 cpu.p3_buttons,
                 cpu.prev_p3_buttons,
             });

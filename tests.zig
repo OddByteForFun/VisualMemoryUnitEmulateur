@@ -1,4 +1,4 @@
-﻿const std = @import("std");
+const std = @import("std");
 const testing = std.testing;
 const Cpu = @import("lc86K").Cpu;
 const isa = @import("isa");
@@ -1086,8 +1086,8 @@ test "initBiosRtc : état attendu par le BIOS" {
     try testing.expectEqual(@as(u16, 0x2E1), cpu.pc); // saute la requête date série
     try testing.expectEqual(@as(u8, 0xFF), cpu.ram_bank0[0x31]); // DateTime_DateSet
     try testing.expectEqual(@as(u8, 0x20), cpu.ram_bank0[0x10]); // siècle BCD
-    try testing.expectEqual(@as(u8, 0xFF), cpu.sfr_raw[0x08]); // IE
-    try testing.expectEqual(@as(u8, 0xFD), cpu.sfr_raw[0x4E]); // P3INT
-    try testing.expectEqual(@as(u8, 0xC0), cpu.sfr_raw[0x5F]); // ISL
-    try testing.expectEqual(@as(u8, 0x41), cpu.sfr_raw[0x7F]); // BTCR
+    try testing.expectEqual(@as(u8, 0xFF), cpu.sfr_raw[Cpu.SFR_IE]);
+    try testing.expectEqual(@as(u8, 0xFD), cpu.sfr_raw[Cpu.SFR_P3INT]);
+    try testing.expectEqual(@as(u8, 0xC0), cpu.sfr_raw[Cpu.SFR_ISL]);
+    try testing.expectEqual(@as(u8, 0x41), cpu.sfr_raw[Cpu.SFR_BTCR]);
 }

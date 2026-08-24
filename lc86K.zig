@@ -95,16 +95,7 @@ pub const Cpu = struct {
             .flash = @splat(0),
         };
         cpu.sp = 0x7F; // Stack pointer (hardware reset default)
-        // VMU hardware SFR reset defaults (table 2.6, p.158 + DreamPotato reference)
-        cpu.sfr_raw[SFR_IE] = 0x80; // 108H: Master interrupt enable (EA=1)
-        cpu.sfr_raw[SFR_SP] = 0x7F; // 106H: Stack pointer
-        cpu.sfr_raw[SFR_P1FCR] = 0xBF; // 146H: Port 1 function control
-        cpu.sfr_raw[SFR_P3INT] = 0x00; // 0xFD; // 14EH: Port 3 interrupt
-        cpu.sfr_raw[SFR_ISL] = 0xC0; // 15FH: Input signal select
-        cpu.sfr_raw[SFR_BTCR] = 0x41; // 17FH: Base timer control (BT0_CYCLE + BT0_IE)
-        cpu.sfr_raw[SFR_VCCR] = 0x80; // 127H: LCD display control (VCCR7=1)
-        cpu.sfr_raw[SFR_VSEL] = 0xFC; // 163H: VTRBF control (INCE=1 + reset defaults)
-        cpu.sfr_raw[SFR_EXT] = 0x80; // 10DH: External memory control (Ext3=1, Ext0=0 → ROM)
+        applySfrResetDefaults(&cpu);
         cpu.pending_ext = 0x80; // Ext3=1, Ext0=0 → ROM mode
         return cpu;
     }
@@ -131,7 +122,14 @@ pub const Cpu = struct {
         self.t1h_counter = 0;
         self.base_timer_acc = 0;
         self.base_timer_counter = 0;
-        // VMU hardware SFR reset defaults (table 2.6, p.158 + DreamPotato reference)
+        applySfrResetDefaults(self);
+        self.inst_bank = .{ .data = self.rom_data, .bank_id = .rom };
+        self.pending_ext = 0x80; // Ext3=1, Ext0=0 → ROM mode (comme DreamPotato)
+    }
+
+    /// Défauts SFR après reset matériel (table 2.6, p.158 + référence DreamPotato).
+    /// Source unique partagée par init() et reset().
+    fn applySfrResetDefaults(self: *Cpu) void {
         self.sfr_raw[SFR_IE] = 0x80; // 108H: Master interrupt enable (EA=1)
         self.sfr_raw[SFR_SP] = 0x7F; // 106H: Stack pointer
         self.sfr_raw[SFR_P1FCR] = 0xBF; // 146H: Port 1 function control
@@ -141,8 +139,6 @@ pub const Cpu = struct {
         self.sfr_raw[SFR_VCCR] = 0x80; // 127H: LCD display control (VCCR7=1)
         self.sfr_raw[SFR_VSEL] = 0xFC; // 163H: VTRBF control (INCE=1 + reset defaults)
         self.sfr_raw[SFR_EXT] = 0x80; // 10DH: External memory control (Ext3=1, Ext0=0 → ROM)
-        self.inst_bank = .{ .data = self.rom_data, .bank_id = .rom };
-        self.pending_ext = 0x80; // Ext3=1, Ext0=0 → ROM mode (comme DreamPotato)
     }
 
     /// Synchronise l'inst_bank avec la valeur courante de pending_ext.
@@ -521,43 +517,45 @@ pub const Cpu = struct {
 
     // il s'agit de définir les offsets utilisés par load8 qui ajoute 0x100 à ces valeurs.
 
-    const SFR_ACC: u7 = 0x00;
-    const SFR_PSW: u7 = 0x01;
-    const SFR_B: u7 = 0x02;
-    const SFR_C: u7 = 0x03;
-    const SFR_TRL: u7 = 0x04;
-    const SFR_TRH: u7 = 0x05;
-    const SFR_SP: u7 = 0x06;
-    const SFR_IE: u7 = 0x08; // autorisation d'interruption
-    const SFR_IP: u7 = 0x09;
+    pub const SFR_ACC: u7 = 0x00;
+    pub const SFR_PSW: u7 = 0x01;
+    pub const SFR_B: u7 = 0x02;
+    pub const SFR_C: u7 = 0x03;
+    pub const SFR_TRL: u7 = 0x04;
+    pub const SFR_TRH: u7 = 0x05;
+    pub const SFR_SP: u7 = 0x06;
+    pub const SFR_IE: u7 = 0x08; // autorisation d'interruption
+    pub const SFR_IP: u7 = 0x09;
+    pub const SFR_OCR: u7 = 0x0E; // oscillateur : quartz/RC et division d'horloge
+    pub const SFR_MCR: u7 = 0x20; // contrôle Maple/LCD (bit3 = mise à jour LCD)
 
     // Timer 0 mode 2
-    const SFR_T0PRR: u7 = 0x11; //  valeur du prescaler Timer 0
-    const SFR_T0L: u7 = 0x12; // Lecture du compteur courant
-    const SFR_T0LR: u7 = 0x13; // Lecture écriture du reload
-    const SFR_T0H: u7 = 0x14; // compteur high courant
-    const SFR_T0HR: u7 = 0x15; //  reload high
-    const SFR_T0CNT: u7 = 0x10; //  contrôle, flags et enables (adresse hardware 0x110)
-    const SFR_PCON: u7 = 0x07; // Power control (bit 0 = HALT mode)
-    const SFR_VSEL: u7 = 0x63; // Control register (INCE=bit4, ASEL=bit0)
-    const SFR_VRMAD1: u7 = 0x64; // Work RAM address low byte
-    const SFR_VRMAD2: u7 = 0x65; // Work RAM address high (VRMAD8=bit0 = bank)
-    const SFR_VTRBF: u7 = 0x66; // Work RAM data access (read/write via VRMAD)
-    const SFR_VLREG: u7 = 0x67; // Maple word count
-    const SFR_MPLSW: u7 = 0x60; // Maple status word
-    const SFR_MPLSTA: u7 = 0x61; // Maple start/status (bit0=TXDONE, bit1=IRQREQ, bit6=UNK)
-    const SFR_MPLRST: u7 = 0x62; // Maple reset
-    const SFR_XBNK: u7 = 0x25; // Sélection banque XRAM (LCD)
-    const SFR_P1: u7 = 0x44; // Port 1 (série + PWM audio)
-    const SFR_P1DDR: u7 = 0x45; // Port 1 data direction
-    const SFR_P1FCR: u7 = 0x46; // Port 1 function control
-    const SFR_P3: u7 = 0x4C; // Port 3 (boutons, input-only)
-    const SFR_P3DDR: u7 = 0x4D; // Port 3 data direction (ne pas modifier)
-    const SFR_P3INT: u7 = 0x4E; // Port 3 interrupt control
-    const SFR_P7: u7 = 0x5C; // Port 7 (détection tension, read-only)
-    const SFR_I23CR: u7 = 0x5E; // sélection front externe INT2/INT3
-    const SFR_ISL: u7 = 0x5F; //  sélection entrée externe et horloge
-    const SFR_VCCR: u7 = 0x27; // LCD contrast/power control
+    pub const SFR_T0PRR: u7 = 0x11; //  valeur du prescaler Timer 0
+    pub const SFR_T0L: u7 = 0x12; // Lecture du compteur courant
+    pub const SFR_T0LR: u7 = 0x13; // Lecture écriture du reload
+    pub const SFR_T0H: u7 = 0x14; // compteur high courant
+    pub const SFR_T0HR: u7 = 0x15; //  reload high
+    pub const SFR_T0CNT: u7 = 0x10; //  contrôle, flags et enables (adresse hardware 0x110)
+    pub const SFR_PCON: u7 = 0x07; // Power control (bit 0 = HALT mode)
+    pub const SFR_VSEL: u7 = 0x63; // Control register (INCE=bit4, ASEL=bit0)
+    pub const SFR_VRMAD1: u7 = 0x64; // Work RAM address low byte
+    pub const SFR_VRMAD2: u7 = 0x65; // Work RAM address high (VRMAD8=bit0 = bank)
+    pub const SFR_VTRBF: u7 = 0x66; // Work RAM data access (read/write via VRMAD)
+    pub const SFR_VLREG: u7 = 0x67; // Maple word count
+    pub const SFR_MPLSW: u7 = 0x60; // Maple status word
+    pub const SFR_MPLSTA: u7 = 0x61; // Maple start/status (bit0=TXDONE, bit1=IRQREQ, bit6=UNK)
+    pub const SFR_MPLRST: u7 = 0x62; // Maple reset
+    pub const SFR_XBNK: u7 = 0x25; // Sélection banque XRAM (LCD)
+    pub const SFR_P1: u7 = 0x44; // Port 1 (série + PWM audio)
+    pub const SFR_P1DDR: u7 = 0x45; // Port 1 data direction
+    pub const SFR_P1FCR: u7 = 0x46; // Port 1 function control
+    pub const SFR_P3: u7 = 0x4C; // Port 3 (boutons, input-only)
+    pub const SFR_P3DDR: u7 = 0x4D; // Port 3 data direction (ne pas modifier)
+    pub const SFR_P3INT: u7 = 0x4E; // Port 3 interrupt control
+    pub const SFR_P7: u7 = 0x5C; // Port 7 (détection tension, read-only)
+    pub const SFR_I23CR: u7 = 0x5E; // sélection front externe INT2/INT3
+    pub const SFR_ISL: u7 = 0x5F; //  sélection entrée externe et horloge
+    pub const SFR_VCCR: u7 = 0x27; // LCD contrast/power control
 
     // Octet qui compose T0CNT
     const T0CNT_T0HRUN: u8 = 0x80;
@@ -570,11 +568,11 @@ pub const Cpu = struct {
     const T0CNT_T0LIE: u8 = 0x01; // T0L interrupt request enabled
 
     // Timer 1 — SFR offsets (0x118-0x11D → offset - 0x100)
-    const SFR_T1CNT: u7 = 0x18; // control, flags, enables
-    const SFR_T1LC: u7 = 0x1A; // low comparator data
-    const SFR_T1L: u7 = 0x1B; // low counter (read) / T1LR reload (write)
-    const SFR_T1HC: u7 = 0x1C; // high comparator data
-    const SFR_T1H: u7 = 0x1D; // high counter (read) / T1HR reload (write)
+    pub const SFR_T1CNT: u7 = 0x18; // control, flags, enables
+    pub const SFR_T1LC: u7 = 0x1A; // low comparator data
+    pub const SFR_T1L: u7 = 0x1B; // low counter (read) / T1LR reload (write)
+    pub const SFR_T1HC: u7 = 0x1C; // high comparator data
+    pub const SFR_T1H: u7 = 0x1D; // high counter (read) / T1HR reload (write)
 
     // P3INT bits
     const P3INT_P30INT: u8 = 0x01; // bit 0: interrupt request enable
@@ -591,7 +589,7 @@ pub const Cpu = struct {
     const T1CNT_T1LIE: u8 = 0x01; // T1L interrupt request enable
 
     // Base Timer
-    const SFR_BTCR: u7 = 0x7F; // gestion notamment des interruptions du base timer
+    pub const SFR_BTCR: u7 = 0x7F; // gestion notamment des interruptions du base timer
     const BTCR_BT0_IE: u8 = 0x01; // bit 0: BT0 request enable
     const BTCR_BT0_FLAG: u8 = 0x02; // bit 1: BT0 source flag
     const BTCR_BT1_IE: u8 = 0x04; // bit 2: BT1 request enable
@@ -615,8 +613,8 @@ pub const Cpu = struct {
     const IP_SIO0: u8 = 0x40; // IE bit 6
     const IP_SIO1: u8 = 0x80; // IE bit 7
 
-    const SFR_EXT: u7 = 0x0D;
-    const SFR_FPR: u7 = 0x54; // Flash Protection Register (bit0=FlashAddressBank, bit1=FlashWriteUnlock)
+    pub const SFR_EXT: u7 = 0x0D;
+    pub const SFR_FPR: u7 = 0x54; // Flash Protection Register (bit0=FlashAddressBank, bit1=FlashWriteUnlock)
 
     pub fn loadSFR(self: *Cpu, offset: u7) u8 {
         return switch (offset) {
@@ -821,5 +819,3 @@ pub const Cpu = struct {
         self.store8(addr + 1, @truncate(val >> 8));
     }
 };
-
-pub fn main() void {}
