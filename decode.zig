@@ -1,88 +1,14 @@
 const std = @import("std");
 const Cpu = @import("lc86K").Cpu;
 const dbg = @import("debug");
+const isa = @import("isa");
 
 // https://mc.pp.se/dc/vms/cpu.html
 
-pub const AddressingMode = enum(u2) {
-    impl,
-    imm,
-    d9,
-    ri,
-};
-
-pub const Inst = enum(u8) {
-    nop,
-    br,
-    ld,
-    ld_ri,
-    call_a12,
-    callr,
-    brf,
-    st,
-    st_ri,
-    callf,
-    jmpf,
-    mov,
-    mov_ri,
-    jmp_a12,
-    mul,
-    be_imm,
-    be_d9,
-    be_ri,
-    div,
-    bne_imm,
-    bne_d9,
-    bne_ri,
-    bpc,
-    dbnz_d9,
-    dbnz_ri,
-    push,
-    inc_d9,
-    inc_ri,
-    bp,
-    pop,
-    dec_d9,
-    dec_ri,
-    bz,
-    add_imm,
-    add_d9,
-    add_ri,
-    bn,
-    bnz,
-    addc_imm,
-    addc_d9,
-    addc_ri,
-    ret,
-    sub_imm,
-    sub_d9,
-    sub_ri,
-    not1,
-    reti,
-    subc_imm,
-    subc_d9,
-    subc_ri,
-    ror,
-    ldc,
-    ldf,
-    stf,
-    xch_d9,
-    xch_ri,
-    clr1,
-    rorc,
-    or_imm,
-    or_d9,
-    or_ri,
-    rol,
-    and_imm,
-    and_d9,
-    and_ri,
-    set1,
-    rolc,
-    xor_imm,
-    xor_d9,
-    xor_ri,
-};
+// Encodage ISA déplacé dans isa.zig (source unique) ; réexporté ici
+// pour préserver les noms existants.
+pub const AddressingMode = isa.AddressingMode;
+pub const Inst = isa.Inst;
 
 pub const DecodeResult = struct {
     inst: Inst,
@@ -718,4 +644,27 @@ pub fn decodeD9(opcode: u8, val: u8) u16 {
     else
         @as(u16, opcode) & 1;
     return d8 << 8 | val;
+}
+
+test "TABLE ISA équivalente aux tables legacy sur les 256 opcodes" {
+    var rom: [256]u8 = undefined;
+    for (0..256) |i| {
+        const op: u8 = @intCast(i);
+        rom[0] = op;
+
+        const legacy = decodeOpcode(op);
+        const e = &isa.TABLE[i];
+        try std.testing.expectEqual(legacy.inst, e.inst);
+        try std.testing.expectEqual(legacy.mode, e.mode);
+        try std.testing.expectEqual(legacy.ri, e.ri);
+        try std.testing.expectEqual(legacy.bit, e.bit);
+        try std.testing.expectEqual(cycles(legacy), e.cycles);
+
+        // Taille : identique à l'ancienne table du désassembleur, sauf
+        // BRF (0x11) corrigé à 3 octets — le décodeur consomme un offset
+        // 16 bits via fetch16.
+        const expected_size: u16 = if (op == 0x11) 3 else dbg.instSize(&rom, 0);
+        try std.testing.expectEqual(expected_size, e.size);
+        try std.testing.expect(e.mnemonic.len > 0);
+    }
 }

@@ -3,6 +3,12 @@ const testing = std.testing;
 const Cpu = @import("lc86K").Cpu;
 const step = @import("decode").step;
 
+// Tire les blocs test des modules importés dans la passe de tests.
+test {
+    _ = @import("isa");
+    _ = @import("decode");
+}
+
 fn makeCpu(rom: []u8) Cpu {
     @memset(rom, 0);
     return Cpu.init(rom);
