@@ -74,6 +74,7 @@ pub fn build(b: *std.Build) void {
     test_mod.addImport("lc86K", lc86K_mod);
     test_mod.addImport("decode", decode_mod);
     test_mod.addImport("isa", isa_mod);
+    test_mod.addImport("debug", debug_mod);
 
     const tests = b.addTest(.{ .root_module = test_mod });
     const run_tests = b.addRunArtifact(tests);

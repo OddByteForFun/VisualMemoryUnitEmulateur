@@ -488,30 +488,3 @@ pub fn decodeD9(opcode: u8, val: u8) u16 {
         @as(u16, opcode) & 1;
     return d8 << 8 | val;
 }
-
-test "TABLE ISA : cohérence structurelle sur les 256 opcodes" {
-    for (0..256) |i| {
-        const e = &isa.TABLE[i];
-        try std.testing.expectEqual(@as(u8, @intCast(i)), e.opcode);
-        try std.testing.expect(e.mnemonic.len > 0);
-        try std.testing.expect(e.size >= 1 and e.size <= 3);
-        try std.testing.expect(e.cycles >= 1);
-        switch (e.mode) {
-            .ri => try std.testing.expect(e.ri != null),
-            else => try std.testing.expect(e.ri == null),
-        }
-        if (e.bit != null) try std.testing.expectEqual(isa.AddressingMode.d9, e.mode);
-    }
-}
-
-test "TABLE ISA : points de contrôle du jeu d'instructions" {
-    // BRF consomme un offset 16 bits (fetch16) : 3 octets au total.
-    try std.testing.expectEqual(isa.Inst.brf, isa.TABLE[0x11].inst);
-    try std.testing.expectEqual(@as(u16, 3), isa.TABLE[0x11].size);
-    // LDF/STF sont de vraies instructions (accès flash), pas des NOP.
-    try std.testing.expectEqualStrings("LDF", isa.TABLE[0x50].mnemonic);
-    try std.testing.expectEqualStrings("STF", isa.TABLE[0x51].mnemonic);
-    // Dérivation ri = col & 3 et bit = opcode & 7.
-    try std.testing.expectEqual(@as(?u8, 1), isa.TABLE[0x05].ri);
-    try std.testing.expectEqual(@as(?u8, 5), isa.TABLE[0x4D].bit);
-}

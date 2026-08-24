@@ -1,17 +1,77 @@
 ﻿const std = @import("std");
 const testing = std.testing;
 const Cpu = @import("lc86K").Cpu;
+const isa = @import("isa");
+const dbg = @import("debug");
 const step = @import("decode").step;
 
 // Tire les blocs test des modules importés dans la passe de tests.
 test {
     _ = @import("isa");
     _ = @import("decode");
+    _ = @import("debug");
 }
 
 fn makeCpu(rom: []u8) Cpu {
     @memset(rom, 0);
     return Cpu.init(rom);
+}
+
+test "TABLE ISA : cohérence structurelle sur les 256 opcodes" {
+    for (0..256) |i| {
+        const e = &isa.TABLE[i];
+        try std.testing.expectEqual(@as(u8, @intCast(i)), e.opcode);
+        try std.testing.expect(e.mnemonic.len > 0);
+        try std.testing.expect(e.size >= 1 and e.size <= 3);
+        try std.testing.expect(e.cycles >= 1);
+        switch (e.mode) {
+            .ri => try std.testing.expect(e.ri != null),
+            else => try std.testing.expect(e.ri == null),
+        }
+        if (e.bit != null) try std.testing.expectEqual(isa.AddressingMode.d9, e.mode);
+    }
+}
+
+test "TABLE ISA : points de contrôle du jeu d'instructions" {
+    // BRF consomme un offset 16 bits (fetch16) : 3 octets au total.
+    try std.testing.expectEqual(isa.Inst.brf, isa.TABLE[0x11].inst);
+    try std.testing.expectEqual(@as(u16, 3), isa.TABLE[0x11].size);
+    // LDF/STF sont de vraies instructions (accès flash), pas des NOP.
+    try std.testing.expectEqualStrings("LDF", isa.TABLE[0x50].mnemonic);
+    try std.testing.expectEqualStrings("STF", isa.TABLE[0x51].mnemonic);
+    // Dérivation ri = col & 3 et bit = opcode & 7.
+    try std.testing.expectEqual(@as(?u8, 1), isa.TABLE[0x05].ri);
+    try std.testing.expectEqual(@as(?u8, 5), isa.TABLE[0x4D].bit);
+}
+
+test "instSize est piloté par la TABLE ISA (BRF inclus)" {
+    var rom: [256]u8 = undefined;
+    for (&rom, 0..) |*b, i| b.* = @intCast(i);
+    for (0..256) |i| {
+        try std.testing.expectEqual(isa.TABLE[i].size, dbg.instSize(&rom, @intCast(i)));
+    }
+    try std.testing.expectEqual(@as(u16, 3), dbg.instSize(&rom, 0x11));
+}
+
+test "disassembleAt couvre les 256 opcodes et corrige LDF/STF" {
+    var rom: [65536]u8 = undefined;
+    @memset(&rom, 0);
+    for (0..256) |i| rom[i] = @intCast(i);
+    var cpu = Cpu.init(&rom);
+    var buf: [64]u8 = undefined;
+
+    // Aucun opcode ne doit faire planter ou produire une sortie vide.
+    for (0..256) |i| {
+        const len = dbg.disassembleAt(&cpu, &buf, @intCast(i));
+        try std.testing.expect(len > 0);
+        try std.testing.expectEqual(@as(u8, ':'), buf[4]);
+    }
+
+    // LDF/STF affichés sous leur vrai nom (plus de faux NOP).
+    const ldf = dbg.disassembleAt(&cpu, &buf, 0x50);
+    try std.testing.expect(std.mem.indexOf(u8, buf[0..ldf], "LDF") != null);
+    const stf = dbg.disassembleAt(&cpu, &buf, 0x51);
+    try std.testing.expect(std.mem.indexOf(u8, buf[0..stf], "STF") != null);
 }
 
 test "ADD immediate VMC-156" {
