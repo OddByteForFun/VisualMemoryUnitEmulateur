@@ -3,6 +3,7 @@ const testing = std.testing;
 const Cpu = @import("lc86K").Cpu;
 const isa = @import("isa");
 const dbg = @import("debug");
+const vmu = @import("vmu");
 const step = @import("decode").step;
 
 // Tire les blocs test des modules importés dans la passe de tests.
@@ -1021,4 +1022,72 @@ test "VMC-214 CALLF example 1" {
     try testing.expectEqual(@as(u8, 0x00), cpu.a);
     _ = step(&cpu); // RET
     try testing.expectEqual(@as(u16, 0xFFF), cpu.pc);
+}
+
+test "initVmuFlash : structure du système de fichiers" {
+    var rom: [65536]u8 = undefined;
+    var cpu = makeCpu(&rom);
+
+    vmu.initVmuFlash(&cpu);
+
+    // Flash effacée = 0xFF, puis structures écrites par-dessus
+    const rb: usize = 255 * 512;
+    for (0..16) |i| {
+        try testing.expectEqual(@as(u8, 0x55), cpu.flash[rb + i]); // magic
+    }
+    try testing.expectEqual(@as(u8, 0xFE), cpu.flash[rb + 0x46]); // FATFirst
+    try testing.expectEqual(@as(u8, 0x00), cpu.flash[rb + 0x47]);
+    try testing.expectEqual(@as(u8, 0xFD), cpu.flash[rb + 0x4A]); // DirLast
+    try testing.expectEqual(@as(u8, 0x0D), cpu.flash[rb + 0x4C]); // DirSize
+    try testing.expectEqual(@as(u8, 0xC8), cpu.flash[rb + 0x50]); // HiddenFirst
+    try testing.expectEqual(@as(u8, 0x80), cpu.flash[rb + 0x56]); // GameSize
+
+    // FAT : root et FAT marqués LastInFile (FFFA), répertoire chaîné 253→241
+    const fb: usize = 254 * 512;
+    try testing.expectEqual(@as(u8, 0xFA), cpu.flash[fb + 255 * 2]);
+    try testing.expectEqual(@as(u8, 0xFF), cpu.flash[fb + 255 * 2 + 1]);
+    try testing.expectEqual(@as(u8, 0xFA), cpu.flash[fb + 254 * 2]);
+    try testing.expectEqual(@as(u8, 0xFC), cpu.flash[fb + 253 * 2]); // 253 → 252
+    try testing.expectEqual(@as(u8, 0xF1), cpu.flash[fb + 242 * 2]); // 242 → 241
+    try testing.expectEqual(@as(u8, 0xFA), cpu.flash[fb + 241 * 2]);
+
+    // Bloc utilisateur hors jeu : effacé
+    try testing.expectEqual(@as(u8, 0xFF), cpu.flash[100 * 512]);
+}
+
+test "installGame : entrée répertoire et chaîne FAT" {
+    var rom: [65536]u8 = undefined;
+    var cpu = makeCpu(&rom);
+    vmu.initVmuFlash(&cpu);
+
+    const game_size: usize = 1024; // 2 blocs
+    vmu.installGame(&cpu, game_size);
+
+    const dir_base = 253 * 512;
+    try testing.expectEqual(@as(u8, 0xCC), cpu.flash[dir_base + 0x00]); // Game
+    try testing.expectEqual(@as(u8, 0x80), cpu.flash[dir_base + 0x01]); // non protégé
+    try testing.expectEqualStrings("GAME", cpu.flash[dir_base + 0x04 .. dir_base + 0x08]);
+    try testing.expectEqual(@as(u8, 2), cpu.flash[dir_base + 0x18]); // SizeInBlocks
+    try testing.expectEqual(@as(u8, 0x01), cpu.flash[dir_base + 0x1A]); // header bloc 1
+
+    // Chaîne FAT : bloc 0 → 1 → LastInFile
+    const fb: usize = 254 * 512;
+    try testing.expectEqual(@as(u8, 0x01), cpu.flash[fb + 0]); // bloc 0 → 1
+    try testing.expectEqual(@as(u8, 0xFA), cpu.flash[fb + 2]); // bloc 1 → last
+    try testing.expectEqual(@as(u8, 0xFF), cpu.flash[fb + 3]);
+}
+
+test "initBiosRtc : état attendu par le BIOS" {
+    var rom: [65536]u8 = undefined;
+    var cpu = makeCpu(&rom);
+
+    vmu.initBiosRtc(&cpu);
+
+    try testing.expectEqual(@as(u16, 0x2E1), cpu.pc); // saute la requête date série
+    try testing.expectEqual(@as(u8, 0xFF), cpu.ram_bank0[0x31]); // DateTime_DateSet
+    try testing.expectEqual(@as(u8, 0x20), cpu.ram_bank0[0x10]); // siècle BCD
+    try testing.expectEqual(@as(u8, 0xFF), cpu.sfr_raw[0x08]); // IE
+    try testing.expectEqual(@as(u8, 0xFD), cpu.sfr_raw[0x4E]); // P3INT
+    try testing.expectEqual(@as(u8, 0xC0), cpu.sfr_raw[0x5F]); // ISL
+    try testing.expectEqual(@as(u8, 0x41), cpu.sfr_raw[0x7F]); // BTCR
 }

@@ -43,6 +43,14 @@ pub fn build(b: *std.Build) void {
     main_mod.addImport("decode", decode_mod);
     main_mod.addImport("debug", debug_mod);
 
+    const vmu_mod = b.createModule(.{
+        .root_source_file = b.path("vmu.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    vmu_mod.addImport("lc86K", lc86K_mod);
+    main_mod.addImport("vmu", vmu_mod);
+
     const raylib_dep = b.dependency("raylib_zig", .{
         .target = target,
         .optimize = optimize,
@@ -75,6 +83,7 @@ pub fn build(b: *std.Build) void {
     test_mod.addImport("decode", decode_mod);
     test_mod.addImport("isa", isa_mod);
     test_mod.addImport("debug", debug_mod);
+    test_mod.addImport("vmu", vmu_mod);
 
     const tests = b.addTest(.{ .root_module = test_mod });
     const run_tests = b.addRunArtifact(tests);
