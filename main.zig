@@ -283,14 +283,25 @@ fn updateButtons(cpu: *Cpu) void {
     var p3int = cpu.sfr_raw[Cpu.SFR_P3INT];
     const p32int = p3int & 0x04 != 0; // P32INT: 1=continuous, 0=edge
 
-    if (buttons != 0xFF) { // any button pressed
-        if (p32int) { // continuous mode
+    if (p32int) {
+        // Continuous mode: set P31INT while any button is pressed
+        if (buttons != 0xFF) {
+            p3int |= 0x02; // set P31INT source flag
+            cpu.sfr_raw[Cpu.SFR_P3INT] = p3int;
+        }
+    } else {
+        // Edge mode: detect falling edges using BIOS formula
+        // (~P3 XOR $70_old) AND ~P3 — bits that are NOW pressed AND were NOT before
+        const old_buttons = cpu.ram_bank0[0x70];
+        const edge = (~buttons ^ old_buttons) & ~buttons;
+        if (edge != 0) {
             p3int |= 0x02; // set P31INT source flag
             cpu.sfr_raw[Cpu.SFR_P3INT] = p3int;
         }
     }
-    // Reset $70 (Buttons_Current) on release so next press generates rising edge.
-    // P3 ISR edge formula: (~P3 XOR $70_old) AND ~P3 — needs $70_old=0x00 when released.
+    // Update $70 (Buttons_Current) for next edge detection
+    cpu.ram_bank0[0x70] = buttons;
+    // Reset $70 on release so next press generates falling edge
     if (buttons == 0xFF) {
         cpu.ram_bank0[0x70] = 0x00;
     }
