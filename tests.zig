@@ -1311,3 +1311,428 @@ test "HALT : réveil par interruption P3 (vecteur 0x004B)" {
     try testing.expectEqual(@as(u8, 1), cpu.interrupt_depth);
     try testing.expectEqual(Cpu.P3INT_P31INT, cpu.sfr_raw[Cpu.SFR_P3INT] & Cpu.P3INT_P31INT); // source maintenue
 }
+
+// ══════════════════════════════════════════════════════════════════
+// Couverture des instructions non testées (doc_inst.md « À faire »)
+// ══════════════════════════════════════════════════════════════════
+
+test "NOP : avance PC de 1" {
+    var rom: [65536]u8 = undefined;
+    var cpu = makeCpu(&rom);
+    rom[0] = 0x00;
+    _ = step(&cpu);
+    try testing.expectEqual(@as(u16, 1), cpu.pc);
+}
+
+test "BR : branchement relatif signé" {
+    var rom: [65536]u8 = undefined;
+    var cpu = makeCpu(&rom);
+    // BR +3 : PC_fetch2=2, +3 → PC=5
+    rom[0] = 0x01;
+    rom[1] = 0x03;
+    _ = step(&cpu);
+    try testing.expectEqual(@as(u16, 5), cpu.pc);
+    // BR -5 : PC_fetch2=0x0009, -5 → PC=0x0004
+    cpu.pc = 7;
+    rom[7] = 0x01;
+    rom[8] = 0xFB; // -5
+    _ = step(&cpu);
+    try testing.expectEqual(@as(u16, 4), cpu.pc);
+}
+
+test "BRF : branchement relatif lointain" {
+    var rom: [65536]u8 = undefined;
+    var cpu = makeCpu(&rom);
+    // BRF offset=0x0010 : PC_fetch3=3, +0x000F → PC=0x0012
+    rom[0] = 0x11;
+    rom[1] = 0x10;
+    rom[2] = 0x00;
+    _ = step(&cpu);
+    try testing.expectEqual(@as(u16, 0x0012), cpu.pc);
+    // Retour arrière : offset=0xFFF0 (-16) : PC_fetch3=0x0023, +0xFFEF → PC=0x0012
+    cpu.pc = 0x0020;
+    rom[0x0020] = 0x11;
+    rom[0x0021] = 0xF0;
+    rom[0x0022] = 0xFF;
+    _ = step(&cpu);
+    try testing.expectEqual(@as(u16, 0x0012), cpu.pc);
+}
+
+test "BNZ : branchement si ACC ≠ 0" {
+    var rom: [65536]u8 = undefined;
+    var cpu = makeCpu(&rom);
+    // BNZ +3 avec ACC=1 → branch
+    rom[0] = 0x90;
+    rom[1] = 0x03;
+    cpu.a = 1;
+    _ = step(&cpu);
+    try testing.expectEqual(@as(u16, 5), cpu.pc);
+    // BNZ +3 avec ACC=0 → pas de branch
+    cpu.pc = 2;
+    cpu.a = 0;
+    rom[2] = 0x90;
+    rom[3] = 0x03;
+    _ = step(&cpu);
+    try testing.expectEqual(@as(u16, 4), cpu.pc);
+}
+
+test "MUL VMC-170 : multiplication ACC:C × B" {
+    var rom: [65536]u8 = undefined;
+    var cpu = makeCpu(&rom);
+    rom[0] = 0x30;
+    rom[1] = 0x30;
+    // Ex1 : 0x1123 × 0x52 = 0x057D36 → B=05, ACC=7D, C=36, CY=0, OV=1
+    cpu.a = 0x11;
+    cpu.c = 0x23;
+    cpu.b = 0x52;
+    _ = step(&cpu);
+    try testing.expectEqual(@as(u8, 0x7D), cpu.a);
+    try testing.expectEqual(@as(u8, 0x36), cpu.c);
+    try testing.expectEqual(@as(u8, 0x05), cpu.b);
+    try testing.expect(!cpu.psw.cy);
+    try testing.expect(cpu.psw.ov);
+    // Ex2 : 0x0705 × 0x10 = 0x007050 → B=00, ACC=70, C=50, CY=0, OV=0
+    cpu.a = 0x07;
+    cpu.c = 0x05;
+    cpu.b = 0x10;
+    _ = step(&cpu);
+    try testing.expectEqual(@as(u8, 0x70), cpu.a);
+    try testing.expectEqual(@as(u8, 0x50), cpu.c);
+    try testing.expectEqual(@as(u8, 0x00), cpu.b);
+    try testing.expect(!cpu.psw.cy);
+    try testing.expect(!cpu.psw.ov);
+}
+
+test "DIV VMC-171 : division ACC:C / B" {
+    var rom: [65536]u8 = undefined;
+    var cpu = makeCpu(&rom);
+    rom[0] = 0x40;
+    rom[1] = 0x40;
+    // Ex1 : 0x7905 / 0x07 = 0x1149 r 6 → ACC=11, C=49, B=06, CY=0, OV=0
+    cpu.a = 0x79;
+    cpu.c = 0x05;
+    cpu.b = 0x07;
+    _ = step(&cpu);
+    try testing.expectEqual(@as(u8, 0x11), cpu.a);
+    try testing.expectEqual(@as(u8, 0x49), cpu.c);
+    try testing.expectEqual(@as(u8, 0x06), cpu.b);
+    try testing.expect(!cpu.psw.cy);
+    try testing.expect(!cpu.psw.ov);
+    // Ex2 : B=0 → ACC=FF, OV=1
+    cpu.a = 0x07;
+    cpu.c = 0x10;
+    cpu.b = 0x00;
+    _ = step(&cpu);
+    try testing.expectEqual(@as(u8, 0xFF), cpu.a);
+    try testing.expect(!cpu.psw.cy);
+    try testing.expect(cpu.psw.ov);
+}
+
+test "BE #i8 : branchement si ACC = immédiat" {
+    var rom: [65536]u8 = undefined;
+    var cpu = makeCpu(&rom);
+    // Égal → branch, CY=0
+    rom[0] = 0x31;
+    rom[1] = 0x02;
+    rom[2] = 0x01;
+    cpu.a = 0x02;
+    _ = step(&cpu);
+    try testing.expectEqual(@as(u16, 4), cpu.pc);
+    try testing.expect(!cpu.psw.cy);
+    // Inégal (ACC < i8) → pas branch, CY=1
+    rom[4] = 0x31;
+    rom[5] = 0x04;
+    rom[6] = 0x01;
+    cpu.pc = 4;
+    cpu.a = 0x03;
+    _ = step(&cpu);
+    try testing.expectEqual(@as(u16, 7), cpu.pc);
+    try testing.expect(cpu.psw.cy);
+}
+
+test "BE d9 : branchement si ACC = direct" {
+    var rom: [65536]u8 = undefined;
+    var cpu = makeCpu(&rom);
+    // BE B, +1 : 0x33 → d8=1, d9=0x102 (SFR_B) → ACC=B → branch
+    rom[0] = 0x33;
+    rom[1] = 0x02;
+    rom[2] = 0x01;
+    cpu.a = 0x05;
+    cpu.b = 0x05;
+    _ = step(&cpu);
+    try testing.expectEqual(@as(u16, 4), cpu.pc);
+    try testing.expect(!cpu.psw.cy);
+    // ACC < B → CY=1, pas branch
+    rom[4] = 0x33;
+    rom[5] = 0x02;
+    rom[6] = 0x01;
+    cpu.pc = 4;
+    cpu.a = 0x03;
+    cpu.b = 0xF2;
+    _ = step(&cpu);
+    try testing.expectEqual(@as(u16, 7), cpu.pc);
+    try testing.expect(cpu.psw.cy);
+}
+
+test "BE @Ri : branchement si ACC = indirect" {
+    var rom: [65536]u8 = undefined;
+    var cpu = makeCpu(&rom);
+    // BE @R0, +1 : ACC = RAM[RAM[0]] → branch
+    rom[0] = 0x34;
+    rom[1] = 0x01;
+    cpu.ram_bank0[0] = 0x10;
+    cpu.ram_bank0[0x10] = 0x05;
+    cpu.a = 0x05;
+    _ = step(&cpu);
+    try testing.expectEqual(@as(u16, 3), cpu.pc);
+    // Pas branch
+    rom[3] = 0x34;
+    rom[4] = 0x01;
+    cpu.pc = 3;
+    cpu.a = 0x06;
+    _ = step(&cpu);
+    try testing.expectEqual(@as(u16, 5), cpu.pc);
+}
+
+test "BNE #i8 : branchement si ACC ≠ immédiat" {
+    var rom: [65536]u8 = undefined;
+    var cpu = makeCpu(&rom);
+    // ACC ≠ i8 → branch
+    rom[0] = 0x41;
+    rom[1] = 0x00;
+    rom[2] = 0x01;
+    cpu.a = 0x02;
+    _ = step(&cpu);
+    try testing.expectEqual(@as(u16, 4), cpu.pc);
+    try testing.expect(!cpu.psw.cy);
+    // ACC = i8 → pas branch
+    rom[4] = 0x41;
+    rom[5] = 0x03;
+    rom[6] = 0x01;
+    cpu.pc = 4;
+    cpu.a = 0x03;
+    _ = step(&cpu);
+    try testing.expectEqual(@as(u16, 7), cpu.pc);
+}
+
+test "BNE d9 : branchement si ACC ≠ direct" {
+    var rom: [65536]u8 = undefined;
+    var cpu = makeCpu(&rom);
+    // ACC < B → branch, CY=1 — 0x43 → d8=1, d9=0x102 (SFR_B)
+    rom[0] = 0x43;
+    rom[1] = 0x02;
+    rom[2] = 0x01;
+    cpu.a = 0x02;
+    cpu.b = 0x03;
+    _ = step(&cpu);
+    try testing.expectEqual(@as(u16, 4), cpu.pc);
+    try testing.expect(cpu.psw.cy);
+    // ACC = B → pas branch, CY=0
+    rom[4] = 0x43;
+    rom[5] = 0x02;
+    rom[6] = 0x01;
+    cpu.pc = 4;
+    cpu.a = 0xF2;
+    cpu.b = 0xF2;
+    _ = step(&cpu);
+    try testing.expectEqual(@as(u16, 7), cpu.pc);
+    try testing.expect(!cpu.psw.cy);
+}
+
+test "BNE @Ri : branchement si ACC ≠ indirect" {
+    var rom: [65536]u8 = undefined;
+    var cpu = makeCpu(&rom);
+    // ACC = RAM[@R0] → pas branch
+    rom[0] = 0x44;
+    rom[1] = 0x01;
+    cpu.ram_bank0[0] = 0x10;
+    cpu.ram_bank0[0x10] = 0xF2;
+    cpu.a = 0xF2;
+    _ = step(&cpu);
+    try testing.expectEqual(@as(u16, 2), cpu.pc);
+    // ACC ≠ RAM[@R0] → branch
+    rom[2] = 0x44;
+    rom[3] = 0x01;
+    cpu.pc = 2;
+    cpu.a = 0x00;
+    _ = step(&cpu);
+    try testing.expectEqual(@as(u16, 5), cpu.pc);
+}
+
+test "BP d9,b3 : branchement si bit = 1" {
+    var rom: [65536]u8 = undefined;
+    var cpu = makeCpu(&rom);
+    // BP ACC,0,+1 → 0x78 → d8=1, bit=0 → ACC.0=1 → branch
+    rom[0] = 0x78;
+    rom[1] = 0x00;
+    rom[2] = 0x01;
+    cpu.a = 0x01;
+    _ = step(&cpu);
+    try testing.expectEqual(@as(u16, 4), cpu.pc);
+    // BP ACC,7,+1 → 0x7F → d8=1, bit=7 → ACC.7=0 → pas branch
+    rom[4] = 0x7F;
+    rom[5] = 0x00;
+    rom[6] = 0x01;
+    cpu.pc = 4;
+    cpu.a = 0x01;
+    _ = step(&cpu);
+    try testing.expectEqual(@as(u16, 7), cpu.pc);
+}
+
+test "BN d9,b3 : branchement si bit = 0" {
+    var rom: [65536]u8 = undefined;
+    var cpu = makeCpu(&rom);
+    // BN ACC,1,+1 → 0x99 → d8=1, bit=1 → ACC.1=0 → branch
+    rom[0] = 0x99;
+    rom[1] = 0x00;
+    rom[2] = 0x01;
+    cpu.a = 0x00;
+    _ = step(&cpu);
+    try testing.expectEqual(@as(u16, 4), cpu.pc);
+    // BN ACC,1,+1 → ACC.1=1 → pas branch
+    rom[4] = 0x99;
+    rom[5] = 0x00;
+    rom[6] = 0x01;
+    cpu.pc = 4;
+    cpu.a = 0x02;
+    _ = step(&cpu);
+    try testing.expectEqual(@as(u16, 7), cpu.pc);
+}
+
+test "SET1/CLR1/NOT1 : manipulation de bits" {
+    var rom: [65536]u8 = undefined;
+    var cpu = makeCpu(&rom);
+    // SET1 ACC,7 → 0xFF → d8=1, bit=7 → ACC |= 0x80
+    rom[0] = 0xFF;
+    rom[1] = 0x00;
+    cpu.a = 0x00;
+    _ = step(&cpu);
+    try testing.expectEqual(@as(u8, 0x80), cpu.a);
+    // CLR1 ACC,7 → 0xDF → d8=1, bit=7 → ACC &= ~0x80
+    rom[2] = 0xDF;
+    rom[3] = 0x00;
+    _ = step(&cpu);
+    try testing.expectEqual(@as(u8, 0x00), cpu.a);
+    // NOT1 ACC,7 → 0xBF → d8=1, bit=7 → toggle bit 7
+    rom[4] = 0xBF;
+    rom[5] = 0x00;
+    _ = step(&cpu);
+    try testing.expectEqual(@as(u8, 0x80), cpu.a);
+    // SET1 07FH,6 → 0xEE → d8=0, bit=6 → RAM[0x7F] |= 0x40
+    rom[6] = 0xEE;
+    rom[7] = 0x7F;
+    _ = step(&cpu);
+    try testing.expectEqual(@as(u8, 0x40), cpu.ram_bank0[0x7F]);
+    // CLR1 07FH,6 → 0xCE → d8=0, bit=6
+    rom[8] = 0xCE;
+    rom[9] = 0x7F;
+    _ = step(&cpu);
+    try testing.expectEqual(@as(u8, 0x00), cpu.ram_bank0[0x7F]);
+}
+
+test "DEC @Ri : décrémentation indirecte" {
+    var rom: [65536]u8 = undefined;
+    var cpu = makeCpu(&rom);
+    rom[0] = 0x74; // DEC @R0 (not 0x64 = INC @R0)
+    rom[1] = 0x74;
+    rom[2] = 0x74;
+    cpu.ram_bank0[0] = 0x10;
+    cpu.ram_bank0[0x10] = 0x02;
+    _ = step(&cpu);
+    try testing.expectEqual(@as(u8, 0x01), cpu.ram_bank0[0x10]);
+    _ = step(&cpu);
+    try testing.expectEqual(@as(u8, 0x00), cpu.ram_bank0[0x10]);
+    _ = step(&cpu); // wrap 0x00→0xFF
+    try testing.expectEqual(@as(u8, 0xFF), cpu.ram_bank0[0x10]);
+}
+
+test "ADDC @Ri : addition avec retenue indirecte" {
+    var rom: [65536]u8 = undefined;
+    var cpu = makeCpu(&rom);
+    rom[0] = 0x94; // ADDC @R0
+    rom[1] = 0x94;
+    rom[2] = 0x94;
+    cpu.ram_bank0[0] = 0x10;
+    cpu.ram_bank0[0x10] = 0x03;
+    // Sans retenue
+    cpu.a = 0x05;
+    cpu.psw.cy = false;
+    _ = step(&cpu);
+    try testing.expectEqual(@as(u8, 0x08), cpu.a);
+    try testing.expect(!cpu.psw.cy);
+    // Débordement → CY=1
+    cpu.a = 0xFF;
+    cpu.psw.cy = false;
+    _ = step(&cpu);
+    try testing.expectEqual(@as(u8, 0x02), cpu.a);
+    try testing.expect(cpu.psw.cy);
+    // Avec retenue : 0x02 + 0x03 + 1 = 0x06
+    _ = step(&cpu);
+    try testing.expectEqual(@as(u8, 0x06), cpu.a);
+    try testing.expect(!cpu.psw.cy);
+}
+
+test "DBNZ d9 : décrémentation directe et branchement" {
+    var rom: [65536]u8 = undefined;
+    var cpu = makeCpu(&rom);
+    // DBNZ B,+1 → 0x53 → d8=1, d9=0x102 (SFR_B) : B=2→1, nonzero → branch
+    rom[0] = 0x53;
+    rom[1] = 0x02;
+    rom[2] = 0x01;
+    cpu.b = 0x02;
+    _ = step(&cpu);
+    try testing.expectEqual(@as(u8, 0x01), cpu.b);
+    try testing.expectEqual(@as(u16, 4), cpu.pc);
+    // DBNZ B,+1 : B=1→0, zero → pas branch
+    rom[4] = 0x53;
+    rom[5] = 0x02;
+    rom[6] = 0x01;
+    _ = step(&cpu);
+    try testing.expectEqual(@as(u8, 0x00), cpu.b);
+    try testing.expectEqual(@as(u16, 7), cpu.pc);
+}
+
+test "DBNZ @Ri : décrémentation indirecte et branchement" {
+    var rom: [65536]u8 = undefined;
+    var cpu = makeCpu(&rom);
+    // DBNZ @R0,+1 : ram[0x10]=2→1, nonzero → branch to PC=3
+    rom[0] = 0x54;
+    rom[1] = 0x01;
+    rom[2] = 0x00; // padding
+    rom[3] = 0x54;
+    rom[4] = 0x01;
+    cpu.ram_bank0[0] = 0x10;
+    cpu.ram_bank0[0x10] = 0x02;
+    _ = step(&cpu);
+    try testing.expectEqual(@as(u8, 0x01), cpu.ram_bank0[0x10]);
+    try testing.expectEqual(@as(u16, 3), cpu.pc);
+    // RAM[0x10]=1→0, zero → pas branch
+    _ = step(&cpu);
+    try testing.expectEqual(@as(u8, 0x00), cpu.ram_bank0[0x10]);
+    try testing.expectEqual(@as(u16, 5), cpu.pc);
+}
+
+test "LDC VMC-191 : chargement depuis ROM (table)" {
+    var rom: [65536]u8 = undefined;
+    var cpu = makeCpu(&rom);
+    rom[0] = 0xC1; // LDC
+    rom[1] = 0xC1;
+    rom[2] = 0xC1;
+    cpu.trh = 0x01;
+    cpu.trl = 0x23; // TRR = 0x0123
+    // ACC=0 → ROM[0x0123]
+    cpu.a = 0x00;
+    rom[0x0123] = 0x30;
+    _ = step(&cpu);
+    try testing.expectEqual(@as(u8, 0x30), cpu.a);
+    // ACC=1 → ROM[0x0124]
+    cpu.a = 0x01;
+    rom[0x0124] = 0xFF;
+    _ = step(&cpu);
+    try testing.expectEqual(@as(u8, 0xFF), cpu.a);
+    // ACC=2 → ROM[0x0125]
+    cpu.a = 0x02;
+    rom[0x0125] = 0x57;
+    _ = step(&cpu);
+    try testing.expectEqual(@as(u8, 0x57), cpu.a);
+}

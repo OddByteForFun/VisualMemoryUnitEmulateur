@@ -31,16 +31,15 @@ Tableau complet des 70 instructions, état d'avancement par opcode, résumé des
 Source : [doc/doc_timer.md](doc/timer.md)
 
 - [x] Timer 0 Mode 2 (16-bit reload, prescaler, overflow, reload au stop), Base Timer (flag BT0 ~0.5s), tick câblé dans `decode.step()`.
-
-- [ ] Interruptions timer (stub `servicePendingInterrupt` prêt), Timer 0 Mode 0, HALT + réveil.
+- [x] Interruptions timer (`servicePendingInterrupt` : priorités int2→int3→t0h→t1→p3→maple, gate EA, blocage post-écriture IE/IP, skip post-RETI façon libevmu), Timer 0 Mode 0 (T0L/T0H 8-bit indépendants, prescaler 256−T0PRR), HALT + réveil par interruption. Comportement verrouillé par tests (72/72).
 
 ## TODO
 
 ### Instructions (P0)
-- [ ] Tests VMC pour les 15 instructions non couvertes
-- [ ] Implémenter `servicePendingInterrupt()` + constantes IE
-- [ ] Timer 0 Mode 0 (deux 8-bit indépendants)
-- [ ] HALT + réveil par interruption
+- [ ] Tests VMC pour les instructions non couvertes
+- [x] Implémenter `servicePendingInterrupt()` + constantes IE
+- [x] Timer 0 Mode 0 (deux 8-bit indépendants)
+- [x] HALT + réveil par interruption
 
 ### Périphériques (P1)
 - [ ] I/O Ports P1, P3, P7 — boutons, état connexion
