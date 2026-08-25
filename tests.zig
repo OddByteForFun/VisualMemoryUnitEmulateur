@@ -1069,7 +1069,7 @@ test "installGame : entrée répertoire et chaîne FAT" {
     try testing.expectEqual(@as(u8, 0x80), cpu.flash[dir_base + 0x01]); // non protégé
     try testing.expectEqualStrings("GAME", cpu.flash[dir_base + 0x04 .. dir_base + 0x08]);
     try testing.expectEqual(@as(u8, 2), cpu.flash[dir_base + 0x18]); // SizeInBlocks
-    try testing.expectEqual(@as(u8, 0x01), cpu.flash[dir_base + 0x1A]); // header bloc 1
+    try testing.expectEqual(@as(u8, 0x00), cpu.flash[dir_base + 0x1A]); // header bloc 0
 
     // Chaîne FAT : bloc 0 → 1 → LastInFile
     const fb: usize = 254 * 512;

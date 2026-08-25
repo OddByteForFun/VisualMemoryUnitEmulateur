@@ -277,36 +277,18 @@ fn updateButtons(cpu: *Cpu) void {
     if (buttons != cpu.p3_buttons) {
         std.debug.print("BUTTONS: {X:0>2} -> {X:0>2} (PC={X:0>4})", .{ cpu.p3_buttons, buttons, cpu.pc });
     }
+
+    // libevmu EvmuGamepad_pollButtons_: set P31INT on falling edge only
+    // (button released→pressed = bit goes 1→0, active-low).
+    // Matches libevmu's prev_buttons & ~new_buttons, regardless of P32INT mode.
+    const edge = cpu.p3_buttons & ~buttons; // bits that just went LOW
+    if (edge != 0) {
+        var p3int = cpu.sfr_raw[Cpu.SFR_P3INT];
+        p3int |= Cpu.P3INT_P31INT; // set source flag
+        cpu.sfr_raw[Cpu.SFR_P3INT] = p3int;
+    }
+
     cpu.p3_buttons = buttons;
-
-    // libevmu EvmuGamepad_pollButtons_: once per frame, set P31INT if button pressed
-    var p3int = cpu.sfr_raw[Cpu.SFR_P3INT];
-    const p32int = p3int & 0x04 != 0; // P32INT: 1=continuous, 0=edge
-
-    if (p32int) {
-        // Continuous mode: set P31INT while any button is pressed
-        if (buttons != 0xFF) {
-            p3int |= 0x02; // set P31INT source flag
-            cpu.sfr_raw[Cpu.SFR_P3INT] = p3int;
-        }
-    } else {
-        // Edge mode: detect falling edges using BIOS formula
-        // (~P3 XOR $70_old) AND ~P3 — bits that are NOW pressed AND were NOT before
-        const old_buttons = cpu.ram_bank0[0x70];
-        const edge = (~buttons ^ old_buttons) & ~buttons;
-        if (edge != 0) {
-            p3int |= 0x02; // set P31INT source flag
-            cpu.sfr_raw[Cpu.SFR_P3INT] = p3int;
-        }
-    }
-    // Update $70 (Buttons_Current) for next edge detection
-    cpu.ram_bank0[0x70] = buttons;
-    // Reset $70 on release so next press generates falling edge
-    if (buttons == 0xFF) {
-        cpu.ram_bank0[0x70] = 0x00;
-    }
-
-    // libevmu also clears HOLD mode here, but we don't implement HOLD yet
 }
 
 fn flushLogFile(init: std.process.Init) void {

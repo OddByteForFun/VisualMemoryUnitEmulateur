@@ -680,7 +680,18 @@ pub const Cpu = struct {
                     self.halted = true;
                 }
             },
-            SFR_P3INT => {},
+            SFR_P3INT => {
+                // P3INT layout (VMU.pdf):
+                //   bit 0: P30INT — interrupt enable (R/W)
+                //   bit 1: P31INT — source flag, cleared by writing 0
+                //   bit 2: P32INT — mode (0=edge, 1=continuous) (R/W)
+                //   bit 3: P33INT — current P3 pin state (R only)
+                // CLR1 P3INT,#1 clears bit 1; software writes clear the source flag.
+                const old = self.sfr_raw[SFR_P3INT];
+                // Preserve read-only bit 3 (current P3 pin state)
+                const writable = val & 0x07;
+                self.sfr_raw[SFR_P3INT] = (old & 0x08) | writable;
+            },
             SFR_T0CNT => {
                 if (val & T0CNT_T0LRUN == 0) {
                     self.t0l_counter = self.sfr_raw[SFR_T0LR];

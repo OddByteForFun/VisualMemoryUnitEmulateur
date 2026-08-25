@@ -98,8 +98,8 @@ pub fn installGame(cpu: *Cpu, game_size: usize) void {
     const size_blocks: u16 = @intCast((game_size + 511) / 512);
     flash[dir_base + 0x18] = @truncate(size_blocks);
     flash[dir_base + 0x19] = @truncate(size_blocks >> 8);
-    // VmsHeaderBlockOffset at 0x1A (header is at block 1)
-    flash[dir_base + 0x1A] = 0x01;
+    // VmsHeaderBlockOffset at 0x1A (header is at block 0)
+    flash[dir_base + 0x1A] = 0x00;
     flash[dir_base + 0x1B] = 0x00;
 
     // Set up FAT chain for game blocks (block 0 → 1 → 2 → ... → FAT_LastInFile)
