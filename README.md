@@ -24,7 +24,15 @@ Les références seront effectuées d'après le fichier VMU.pdf
 
 Source : [doc/doc_inst.md](doc/inst.md) 
 Tableau complet des 70 instructions, état d'avancement par opcode, résumé des tests VMC.  
-68/70 instructions implémentées 🟢, 67 avec test, 1 à ajouter (callr).  
+68/70 instructions implémentées 🟢, 67 avec test, 1 à ajouter (callr).
+
+```
+zig build test --summary all
+Build Summary: 3/3 steps succeeded; 92/92 tests passed
+test success
+└─ run test 92 pass (92 total) 22ms MaxRSS:4M
+   └─ compile test Debug native cached 53ms MaxRSS:21M
+```
 
 ### Timers
 
