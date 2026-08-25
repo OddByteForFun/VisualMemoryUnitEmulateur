@@ -174,7 +174,6 @@ pub fn checkBiosPhase(cpu: *Cpu) ?BiosPhase {
 }
 
 fn reportBiosPhase(phase: BiosPhase, cpu: *Cpu) void {
-    std.debug.print("[BIOS] Phase: {s} (PC=0x{X:0>4})\n", .{ @tagName(phase), cpu.pc });
     log("[BIOS] Phase: {s} (PC=0x{X:0>4})", .{ @tagName(phase), cpu.pc });
 }
 

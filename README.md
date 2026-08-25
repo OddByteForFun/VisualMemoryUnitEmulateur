@@ -24,19 +24,19 @@ Les références seront effectuées d'après le fichier VMU.pdf
 
 Source : [doc/doc_inst.md](doc/inst.md) 
 Tableau complet des 70 instructions, état d'avancement par opcode, résumé des tests VMC.  
-68/70 instructions implémentées 🟢, 53 avec test VMC, 15 tests à ajouter.  
+68/70 instructions implémentées 🟢, 67 avec test, 1 à ajouter (callr).  
 
 ### Timers
 
 Source : [doc/doc_timer.md](doc/timer.md)
 
 - [x] Timer 0 Mode 2 (16-bit reload, prescaler, overflow, reload au stop), Base Timer (flag BT0 ~0.5s), tick câblé dans `decode.step()`.
-- [x] Interruptions timer (`servicePendingInterrupt` : priorités int2→int3→t0h→t1→p3→maple, gate EA, blocage post-écriture IE/IP, skip post-RETI façon libevmu), Timer 0 Mode 0 (T0L/T0H 8-bit indépendants, prescaler 256−T0PRR), HALT + réveil par interruption. Comportement verrouillé par tests (72/72).
+- [x] Interruptions timer (`servicePendingInterrupt` : priorités int2→int3→t0h→t1→p3→maple, gate EA, blocage post-écriture IE/IP, skip post-RETI façon libevmu), Timer 0 Mode 0 (T0L/T0H 8-bit indépendants, prescaler 256−T0PRR), HALT + réveil par interruption. Comportement verrouillé par tests (92/92).
 
 ## TODO
 
 ### Instructions (P0)
-- [ ] Tests VMC pour les instructions non couvertes
+- [x] Tests VMC pour les instructions non couvertes
 - [x] Implémenter `servicePendingInterrupt()` + constantes IE
 - [x] Timer 0 Mode 0 (deux 8-bit indépendants)
 - [x] HALT + réveil par interruption

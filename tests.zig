@@ -14,6 +14,7 @@ test {
 }
 
 fn makeCpu(rom: []u8) Cpu {
+    dbg.log_level = .none;
     @memset(rom, 0);
     return Cpu.init(rom);
 }

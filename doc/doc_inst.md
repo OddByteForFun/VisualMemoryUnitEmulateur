@@ -122,13 +122,13 @@ Le LC86K possède 70 instructions (p561 du manuel).
 
 | Instruction | Opcode(s) | Impl. | VMC |
 |-------------|-----------|:-----:|-----|
-| nop | 0x00 | 🟢 | À faire |
-| br | 0x01 | 🟢 | À faire |
+| nop | 0x00 | 🟢 | test |
+| br | 0x01 | 🟢 | test |
 | ld | 0x02–0x03 | 🟢 | VMC-185, VMC-186 |
 | ld_ri | 0x04–0x07 | 🟢 | VMC-186 |
 | call_a12 | 0x08–0x0F, 0x18–0x1F | 🟢 | VMC-213 |
 | callr | 0x10 | 🟢 | À faire |
-| brf | 0x11 | 🟢 | À faire |
+| brf | 0x11 | 🟢 | test |
 | st | 0x12–0x13 | 🟢 | VMC-187, VMC-188 |
 | st_ri | 0x14–0x17 | 🟢 | VMC-188 |
 | callf | 0x20 | 🟢 | VMC-214 |
@@ -136,44 +136,44 @@ Le LC86K possède 70 instructions (p561 du manuel).
 | mov | 0x22–0x23 | 🟢 | VMC-189 |
 | mov_ri | 0x24–0x27 | 🟢 | VMC-190 |
 | jmp_a12 | 0x28–0x2F, 0x38–0x3F | 🟢 | VMC-196 |
-| mul | 0x30 | 🟢 | À faire |
+| mul | 0x30 | 🟢 | VMC-170 |
 | be_imm | 0x31 | 🟢 | VMC-207 |
-| be_d9 | 0x32–0x33 | 🟢 | À faire |
-| be_ri | 0x34–0x37 | 🟢 | À faire |
-| div | 0x40 | 🟢 | À faire |
+| be_d9 | 0x32–0x33 | 🟢 | test |
+| be_ri | 0x34–0x37 | 🟢 | test |
+| div | 0x40 | 🟢 | VMC-171 |
 | bne_imm | 0x41 | 🟢 | VMC-210 |
-| bne_d9 | 0x42–0x43 | 🟢 | À faire |
-| bne_ri | 0x44–0x47 | 🟢 | À faire |
+| bne_d9 | 0x42–0x43 | 🟢 | test |
+| bne_ri | 0x44–0x47 | 🟢 | test |
 | bpc | 0x48–0x4F, 0x58–0x5F | 🟢 | VMC-203 |
 | dbnz_d9 | 0x52–0x53 | 🟢 | VMC-205 |
-| dbnz_ri | 0x54–0x57 | 🟢 | À faire |
+| dbnz_ri | 0x54–0x57 | 🟢 | test |
 | push | 0x60–0x61 | 🟢 | VMC-192 |
 | inc_d9 | 0x62–0x63 | 🟢 | VMC-166 |
 | inc_ri | 0x64–0x67 | 🟢 | VMC-167 |
-| bp | 0x68–0x6F, 0x78–0x7F | 🟢 | À faire |
+| bp | 0x68–0x6F, 0x78–0x7F | 🟢 | test |
 | pop | 0x70–0x71 | 🟢 | VMC-192 |
 | dec_d9 | 0x72–0x73 | 🟢 | VMC-168 |
-| dec_ri | 0x74–0x77 | 🟢 | À faire |
+| dec_ri | 0x74–0x77 | 🟢 | test |
 | bz | 0x80 | 🟢 | VMC-200 |
 | add_imm | 0x81 | 🟢 | VMC-156 |
 | add_d9 | 0x82–0x83 | 🟢 | VMC-156 |
 | add_ri | 0x84–0x87 | 🟢 | VMC-157 |
-| bn | 0x88–0x8F, 0x98–0x9F | 🟢 | À faire |
-| bnz | 0x90 | 🟢 | À faire |
+| bn | 0x88–0x8F, 0x98–0x9F | 🟢 | test |
+| bnz | 0x90 | 🟢 | test |
 | addc_imm | 0x91 | 🟢 | VMC-158, VMC-159 |
 | addc_d9 | 0x92–0x93 | 🟢 | VMC-159 |
-| addc_ri | 0x94–0x97 | 🟢 | À faire |
+| addc_ri | 0x94–0x97 | 🟢 | test |
 | ret | 0xA0 | 🟢 | VMC-213, VMC-214 |
 | sub_imm | 0xA1 | 🟢 | VMC-160 |
 | sub_d9 | 0xA2–0xA3 | 🟢 | VMC-161 |
 | sub_ri | 0xA4–0xA7 | 🟢 | VMC-162 |
-| not1 | 0xA8–0xAF, 0xB8–0xBF | 🟢 | À faire |
-| reti | 0xB0 | 🟢 | À faire |
+| not1 | 0xA8–0xAF, 0xB8–0xBF | 🟢 | test |
+| reti | 0xB0 | 🟢 | test |
 | subc_imm | 0xB1 | 🟢 | VMC-163 |
 | subc_d9 | 0xB2–0xB3 | 🟢 | VMC-164 |
 | subc_ri | 0xB4–0xB7 | 🟢 | VMC-165, VMC-166 |
 | ror | 0xC0 | 🟢 | VMC-183 |
-| ldc | 0xC1 | 🟢 | À faire |
+| ldc | 0xC1 | 🟢 | VMC-191 |
 | xch_d9 | 0xC2–0xC3 | 🟢 | VMC-194 |
 | xch_ri | 0xC4–0xC7 | 🟢 | VMC-195 |
 | clr1 | 0xC8–0xCF, 0xD8–0xDF | 🟢 | VMC-218 |
@@ -185,7 +185,7 @@ Le LC86K possède 70 instructions (p561 du manuel).
 | and_imm | 0xE1 | 🟢 | VMC-173 |
 | and_d9 | 0xE2–0xE3 | 🟢 | VMC-173 |
 | and_ri | 0xE4–0xE7 | 🟢 | VMC-174 |
-| set1 | 0xE8–0xEF, 0xF8–0xFF | 🟢 | À faire |
+| set1 | 0xE8–0xEF, 0xF8–0xFF | 🟢 | test |
 | rolc | 0xF0 | 🟢 | VMC-182 |
 | xor_imm | 0xF1 | 🟢 | VMC-178 |
 | xor_d9 | 0xF2–0xF3 | 🟢 | VMC-179 |
@@ -196,8 +196,8 @@ Le LC86K possède 70 instructions (p561 du manuel).
 | Status | Nb instructions |
 |--------|:--------------:|
 | 🟢 implémenté | 68 |
-| 🟢 VMC testé | 53 |
-| 🔴 À faire | 15 |
+| 🟢 testé | 67 |
+| 🔴 À faire | 1 |
 
-**Tests :** 53/53 passent ✅ (`zig build test`).  
-Les tests sont les exemples VMC-XXX du **Sanyo LC86K Series Programming Manual** (doc/VMU.txt, section VMC-151 à VMC-224). Chaque test référence le numéro d'exemple (e.g. VMC-159, VMC-167) comme spécification de référence.
+**Tests :** 92/92 passent ✅ (`zig build test`).  
+Les tests couvrent les exemples VMC-XXX du **Sanyo LC86K Series Programming Manual** (doc/VMU.txt, section VMC-151 à VMC-224) et des tests unitaires ciblés pour les instructions sans exemple VMC. La seule instruction sans test dédié est `callr` (CALL relative, opcode 0x10).
