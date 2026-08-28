@@ -448,9 +448,11 @@ pub const Cpu = struct {
     };
 
     pub fn requestLevelDrivenInterrupts(self: *Cpu) void {
-        // P31INT is now set by updateButtons() in main.zig (once per frame,
-        // matching libevmu's EvmuGamepad_pollButtons_). Empty here to avoid
-        // per-instruction IRQ storms.
+        // P31INT is set once-per-frame by updateButtons() in main.zig.
+        // This matches DreamPotato's button sampling (once per frame at ~60Hz)
+        // rather than libevmu's per-instruction poll, which would re-fire the P3
+        // interrupt on every instruction while a button is held and starve the
+        // main loop (HOLD lockup).
         _ = self;
     }
 

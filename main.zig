@@ -428,7 +428,8 @@ fn updateButtons(cpu: *Cpu) void {
     }
     cpu.p3_buttons = buttons;
 
-    // libevmu EvmuGamepad_pollButtons_: once per frame, set P31INT if button pressed
+    // libevmu EvmuGamepad_pollButtons_ / DreamPotato once-per-frame: set P31INT if
+    // a button is pressed while continuous mode (P32INT) is enabled.
     var p3int = cpu.sfr_raw[0x4E]; // P3INT
     const p32int = p3int & 0x04 != 0; // P32INT: 1=continuous, 0=edge
 
@@ -438,13 +439,11 @@ fn updateButtons(cpu: *Cpu) void {
             cpu.sfr_raw[0x4E] = p3int;
         }
     }
-    // Reset $70 (Buttons_Current) on release so next press generates rising edge.
-    // P3 ISR edge formula: (~P3 XOR $70_old) AND ~P3 — needs $70_old=0x00 when released.
+    // Reset $70 (Buttons_Current) on release so next press generates a rising edge
+    // for the BIOS's edge-detection (P3 ISR at 0x1F35 keeps $70/$72).
     if (buttons == 0xFF) {
         cpu.ram_bank0[0x70] = 0x00;
     }
-
-    // libevmu also clears HOLD mode here, but we don't implement HOLD yet
 }
 
 fn flushLogFile(init: std.process.Init) void {
