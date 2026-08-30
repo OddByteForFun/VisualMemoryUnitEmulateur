@@ -1,5 +1,7 @@
 const std = @import("std");
 
+pub var flashTrace: bool = false;
+
 pub const Psw = packed struct(u8) {
     p: bool = false, // bit 0 — Parity (odd parity of ACC, read-only)
     rambk0: bool = false, // bit 1 — RAM bank select (0=bank0, 1=bank1)
@@ -167,31 +169,22 @@ pub const Cpu = struct {
 
     /// Synchronise l'inst_bank avec la valeur courante de pending_ext.
     /// Appelé uniquement après JMPF (bank switch différé).
+    ///
+    /// Sur le VMU, le sélecteur d'espace instruction n'est pas piloté par le bit 0
+    /// seul : le BIOS de lancement utilise une valeur de type 0x88 pour passer en
+    /// flash et 0x80 pour rester en ROM. Le bit de commutation utile est donc le
+    /// bit 3 (0x08), tandis que 0x80 reste un indicateur de mode système.
     pub fn syncInstructionBank(self: *Cpu) void {
         self.sync_count += 1;
         const ext = self.pending_ext;
-        // Interprétation selon DreamPotato : Ext3 (bit 3) et Ext0 (bit 0)
-        // ROM         → Ext3=1, Ext0=0
-        // FlashBank0  → Ext3=1, Ext0=1
-        // FlashBank1  → Ext3=0, Ext0=0
         if (ext & 0x08 != 0) {
-            // Ext3 = 1
-            if (ext & 0x01 != 0) {
-                // Ext0 = 1 → FlashBank0
-                self.inst_bank.data = self.flash[0..65536];
-                self.inst_bank.bank_id = .flash0;
-                self.last_sync_bank = .flash0;
-            } else {
-                // Ext0 = 0 → ROM
-                self.inst_bank.data = self.rom_data;
-                self.inst_bank.bank_id = .rom;
-                self.last_sync_bank = .rom;
-            }
+            self.inst_bank.data = self.flash[0..65536];
+            self.inst_bank.bank_id = .flash0;
+            self.last_sync_bank = .flash0;
         } else {
-            // Ext3 = 0 → FlashBank1
-            self.inst_bank.data = self.flash[65536..131072];
-            self.inst_bank.bank_id = .flash1;
-            self.last_sync_bank = .flash1;
+            self.inst_bank.data = self.rom_data;
+            self.inst_bank.bank_id = .rom;
+            self.last_sync_bank = .rom;
         }
     }
 
@@ -199,17 +192,19 @@ pub const Cpu = struct {
     pub fn setInstructionBank(self: *Cpu, bank: enum { rom, flash0, flash1 }) void {
         switch (bank) {
             .rom => {
-                self.pending_ext = 0x80; // Ext3=1, Ext0=0
+                self.pending_ext = 0x80; // ROM mode: BIOS selected
+                self.sfr_raw[SFR_EXT] = 0x80;
                 self.inst_bank.data = self.rom_data;
                 self.inst_bank.bank_id = .rom;
             },
             .flash0 => {
-                self.pending_ext = 0x89; // Ext3=1, Ext0=1
+                self.pending_ext = 0x88; // flash0 launch pattern seen in BIOS wrapper (bit3 set)
+                self.sfr_raw[SFR_EXT] = 0x88;
                 self.inst_bank.data = self.flash[0..65536];
                 self.inst_bank.bank_id = .flash0;
             },
             .flash1 => {
-                self.pending_ext = 0x00; // Ext3=0, Ext0=0
+                self.pending_ext = 0x00; // non utilisé en exécution (code toujours en bank 0)
                 self.inst_bank.data = self.flash[65536..131072];
                 self.inst_bank.bank_id = .flash1;
             },
@@ -539,7 +534,12 @@ pub const Cpu = struct {
             .t1 => {
                 self.sfr_raw[SFR_T1CNT] &= ~(T1CNT_T1HOVF | T1CNT_T1LOVF);
             },
-            .p3 => {}, // P31INT source flag stays set until cleared by ISR
+            .p3 => {
+                // Real VMU hardware clears the source flag when servicing the P3 interrupt.
+                // If we leave P31INT set, the BIOS re-enters the same IRQ forever and loops
+                // in the ROM launch wrapper instead of switching into the game.
+                self.sfr_raw[SFR_P3INT] &= ~P3INT_P31INT;
+            },
             .maple => self.maple_irq_pending = false,
         };
     }
@@ -859,7 +859,15 @@ pub const Cpu = struct {
     /// LDF: read flash at 17-bit address = TRL | (TRH << 8) | (FPR.FlashAddressBank ? 0x10000 : 0)
     pub fn readFlash(self: *Cpu) u8 {
         const a17: u17 = @as(u17, self.trl) | (@as(u17, self.trh) << 8) | (if (self.sfr_raw[SFR_FPR] & 0x01 != 0) @as(u17, 0x10000) else 0);
-        if (a17 < 131072) return self.flash[a17];
+        if (a17 < 131072) {
+            if (flashTrace) {
+                const blk: u16 = @intCast(a17 >> 9);
+                if (blk >= 240 or blk < 64) {
+                    std.debug.print("LDF block={d} off={d} val={X:0>2} PC={X:0>4}\n", .{ blk, a17 & 0x1FF, self.flash[a17], self.pc });
+                }
+            }
+            return self.flash[a17];
+        }
         return 0xFF;
     }
 

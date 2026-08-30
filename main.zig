@@ -3,7 +3,6 @@ const Cpu = @import("lc86K").Cpu;
 const decode = @import("decode");
 const step = decode.step;
 const rl = @import("raylib");
-const dbg = @import("debug");
 
 const LCD_W = 48;
 const LCD_H = 32;
@@ -13,7 +12,11 @@ const FG = rl.Color.init(20, 20, 20, 255);
 const BG = rl.Color.init(190, 210, 180, 255);
 
 var azerty_mode: bool = false;
-var trace_mode: bool = false;
+var bios_menu_mode_flag: bool = false;
+var bios_menu_active: bool = false;
+var bios_menu_selected: bool = false;
+var bios_menu_index: u32 = 0;
+var start_pulse_frames: u32 = 0;
 
 pub fn main(init: std.process.Init) !void {
     var arg_iter = try std.process.Args.Iterator.initAllocator(init.minimal.args, init.arena.allocator());
@@ -26,8 +29,8 @@ pub fn main(init: std.process.Init) !void {
     while (arg_iter.next()) |arg| {
         if (std.mem.eql(u8, arg, "--azerty")) {
             azerty_mode = true;
-        } else if (std.mem.eql(u8, arg, "--trace")) {
-            trace_mode = true;
+        } else if (std.mem.eql(u8, arg, "--bios-menu")) {
+            bios_menu_mode_flag = true;
         } else if (path_a == null) {
             path_a = arg;
         } else if (path_b == null) {
@@ -36,9 +39,11 @@ pub fn main(init: std.process.Init) !void {
     }
 
     _ = path_a orelse {
-        std.debug.print("Usage: lc86K [<bios.bin>] <game.vms> [--azerty] [--trace]\n", .{});
+        std.debug.print("Usage: lc86K [<bios.bin>] <game.vms> [--azerty] [--bios-menu]\n", .{});
         return;
     };
+
+    const use_bios_menu: bool = bios_menu_mode_flag or path_b != null;
 
     // 2 files: first=BIOS, second=game | 1 file: game only, BIOS auto-detected
     const bios_path: []const u8 = if (path_b != null) path_a.? else "roms/vmu_bios_jp.bin";
@@ -108,18 +113,17 @@ pub fn main(init: std.process.Init) !void {
     // Initialize BIOS RTC (same as DreamPotato's InitializeRTCDate)
     // The BIOS checks DateTime_DateSet (RAM 0xFF) to decide if date is ready.
     // Without this, the BIOS waits forever for the Dreamcast to send the date.
-    initBiosRtc(&cpu);
+    initBiosRtc(&cpu, use_bios_menu);
 
-    dbg.init();
-    dbg.log_level = if (trace_mode) .trace else .info;
-    dbg.enableFileLog();
-    dbg.log("=== VMU Emulator Start === BIOS: {s} ({d} bytes) Game: {s} ({d} bytes)", .{ bios_path, bios_size, game_path, game_size });
+    if (use_bios_menu) {
+        bios_menu_active = true;
+        std.debug.print("BIOS menu mode enabled: P7=0x{X:0>2} (non-standalone => BIOS file menu path)\n", .{ cpu.sfr_raw[0x5C] });
+    }
 
     const win_w: i32 = LCD_W * SCALE;
     const win_h: i32 = LCD_H * SCALE + 24 + SCALE + 8;
     rl.initWindow(win_w, win_h, "LC86K VMU Emulator");
     defer rl.closeWindow();
-    defer flushLogFile(init);
     rl.setTargetFPS(60);
 
     var cycles: u64 = 0;
@@ -130,13 +134,6 @@ pub fn main(init: std.process.Init) !void {
     var prev_halted = false;
 
     while (!rl.windowShouldClose()) {
-        // Flush log file periodically (every 60 frames ~ 1s) — BEFORE updateButtons
-        // so that new BUTTONS entries always have room in the buffer
-        if (frames % 60 == 0 and dbg.file_buf_pos > 0) {
-            flushLogFile(init);
-            dbg.clearLogData();
-        }
-
         // Poll input events BEFORE reading key state, so isKeyDown reflects current frame
         rl.pollInputEvents();
         updateButtons(&cpu);
@@ -145,10 +142,10 @@ pub fn main(init: std.process.Init) !void {
         var i: u64 = 0;
         while (i < cycles_per_frame) : (i += 1) {
             _ = step(&cpu);
+            _ = cpu.checkBiosPhase();
             cycles += 1;
 
             if (cpu.halted != prev_halted) {
-                dbg.log("HALTED CHANGED: {} -> {} PC={X:0>4}", .{ prev_halted, cpu.halted, cpu.pc });
                 prev_halted = cpu.halted;
             }
 
@@ -167,7 +164,6 @@ pub fn main(init: std.process.Init) !void {
                     cpu.requestLevelDrivenInterrupts();
                     cpu.servicePendingInterrupt();
                     if (!cpu.halted) {
-                        dbg.log("WAKEUP from HALT by interrupt, PC={X:0>4}", .{cpu.pc});
                         break;
                     }
                 }
@@ -178,23 +174,33 @@ pub fn main(init: std.process.Init) !void {
 
             if (cpu.pc == prev_pc) {
                 stuck_count += 1;
-                if (stuck_count == 300) {
-                    dbg.log("STUCK at PC={X:0>4}", .{cpu.pc});
-                    var j: u16 = 0;
-                    while (j < 16) : (j += 1) {
-                        const addr = cpu.pc +% j;
-                        dbg.log("  ROM[{X:0>4}] = {X:0>2}", .{ addr, cpu.inst_bank.data[addr] });
-                    }
-                }
             } else {
                 stuck_count = 0;
                 prev_pc = cpu.pc;
             }
         }
 
+        if (!bios_menu_selected and cpu.bios_phase == .bios_game_launch) {
+            // Hardware-like transition: clear the full P3 latch before the game starts so no
+            // stale BIOS MODE or Start state leaks into flash0 execution.
+            cpu.p3_buttons = 0xFF;
+            cpu.prev_p3_buttons = 0xFF;
+            cpu.ram_bank0[0x70] = 0xFF;
+            cpu.sfr_raw[0x4E] = 0xFD;
+            cpu.setInstructionBank(.flash0);
+            cpu.pc = 0x0000;
+            bios_menu_selected = true;
+            bios_menu_active = false;
+            start_pulse_frames = 0;
+        }
+
         rl.beginDrawing();
         rl.clearBackground(BG);
-        renderLcd(&cpu);
+        if (bios_menu_active and !bios_menu_selected) {
+            drawBiosMenuScreen(game_path);
+        } else {
+            renderLcd(&cpu);
+        }
 
         var buf: [256]u8 = undefined;
         const status = std.fmt.bufPrintZ(&buf, "PC=0x{X:0>4} ext={X:0>2} sync={d} xram_wr={d}", .{ cpu.pc, cpu.pending_ext, cpu.sync_count, cpu.xram_write_count }) catch "??";
@@ -203,99 +209,77 @@ pub fn main(init: std.process.Init) !void {
         rl.endDrawing();
         frames += 1;
 
-        if (frames == 10 or frames == 30 or frames == 100 or frames == 300) {
-            dbg.log("XRAM dump @ frame {d} xram_wr={d} xbnk={d}:", .{ frames, cpu.xram_write_count, cpu.sfr_raw[0x25] & 3 });
-            var nonzero: u32 = 0;
-            inline for (cpu.xram_banks.bank0) |b| {
-                if (b != 0) nonzero += 1;
-            }
-            inline for (cpu.xram_banks.bank1) |b| {
-                if (b != 0) nonzero += 1;
-            }
-            inline for (cpu.xram_banks.bank2) |b| {
-                if (b != 0) nonzero += 1;
-            }
-            dbg.log("  bank0[0..16]: {X:0>2} {X:0>2} {X:0>2} {X:0>2} {X:0>2} {X:0>2} {X:0>2} {X:0>2} {X:0>2} {X:0>2} {X:0>2} {X:0>2} {X:0>2} {X:0>2} {X:0>2} {X:0>2}", .{
-                cpu.xram_banks.bank0[0],  cpu.xram_banks.bank0[1],  cpu.xram_banks.bank0[2],  cpu.xram_banks.bank0[3],
-                cpu.xram_banks.bank0[4],  cpu.xram_banks.bank0[5],  cpu.xram_banks.bank0[6],  cpu.xram_banks.bank0[7],
-                cpu.xram_banks.bank0[8],  cpu.xram_banks.bank0[9],  cpu.xram_banks.bank0[10], cpu.xram_banks.bank0[11],
-                cpu.xram_banks.bank0[12], cpu.xram_banks.bank0[13], cpu.xram_banks.bank0[14], cpu.xram_banks.bank0[15],
-            });
-            dbg.log("  bank1[0..16]: {X:0>2} {X:0>2} {X:0>2} {X:0>2} {X:0>2} {X:0>2} {X:0>2} {X:0>2} {X:0>2} {X:0>2} {X:0>2} {X:0>2} {X:0>2} {X:0>2} {X:0>2} {X:0>2}", .{
-                cpu.xram_banks.bank1[0],  cpu.xram_banks.bank1[1],  cpu.xram_banks.bank1[2],  cpu.xram_banks.bank1[3],
-                cpu.xram_banks.bank1[4],  cpu.xram_banks.bank1[5],  cpu.xram_banks.bank1[6],  cpu.xram_banks.bank1[7],
-                cpu.xram_banks.bank1[8],  cpu.xram_banks.bank1[9],  cpu.xram_banks.bank1[10], cpu.xram_banks.bank1[11],
-                cpu.xram_banks.bank1[12], cpu.xram_banks.bank1[13], cpu.xram_banks.bank1[14], cpu.xram_banks.bank1[15],
-            });
-            dbg.log("  bank2[0..6]:  {X:0>2} {X:0>2} {X:0>2} {X:0>2} {X:0>2} {X:0>2}  nonzero={d}", .{
-                cpu.xram_banks.bank2[0], cpu.xram_banks.bank2[1], cpu.xram_banks.bank2[2],
-                cpu.xram_banks.bank2[3], cpu.xram_banks.bank2[4], cpu.xram_banks.bank2[5],
-                nonzero,
-            });
-        }
     }
 }
 
-/// Initialize VMU flash with a proper filesystem (same layout as DreamPotato).
+/// Initialize VMU flash with a libevmu-like filesystem layout.
 /// Flash = 128KB = 256 blocks × 512 bytes.
 /// Blocks 0-199: user data, 200-240: hidden, 241-253: directory, 254: FAT, 255: root.
 fn initVmuFlash(cpu: *Cpu) void {
     const flash = &cpu.flash;
-    // Erased flash is 0xFF
     @memset(flash, 0xFF);
 
-    // --- Root block (block 255, offset 0x1FE00) ---
+    // Root block: 255, offset 0x1FE00.
+    // Keep the metadata 16-bit little-endian fields in the exact layout expected by
+    // the BIOS when scanning the VMU filesystem.
     const rb: usize = 255 * 512;
-    // Magic 0x55 at 0x00-0x0F
     for (0..16) |i| flash[rb + i] = 0x55;
-    // VolumeLast at 0x40
+
+    // VolumeLast at 0x40, 0xFFFF = no last volume in this unit
     flash[rb + 0x40] = 0xFF;
     flash[rb + 0x41] = 0xFF;
-    // Partition at 0x42
+
+    // Partition at 0x42, 0x0000 = primary partition
     flash[rb + 0x42] = 0x00;
     flash[rb + 0x43] = 0x00;
-    // Root at 0x44
+
+    // Root at 0x44 (block 255)
     flash[rb + 0x44] = 0xFF;
     flash[rb + 0x45] = 0x00;
-    // FATFirst at 0x46
+
+    // FATFirst at 0x46 (block 254)
     flash[rb + 0x46] = 0xFE;
     flash[rb + 0x47] = 0x00;
-    // FATSize at 0x48
+
+    // FATSize at 0x48 (1 block)
     flash[rb + 0x48] = 0x01;
     flash[rb + 0x49] = 0x00;
-    // DirLast at 0x4A
+
+    // DirLast at 0x4A (block 253)
     flash[rb + 0x4A] = 0xFD;
     flash[rb + 0x4B] = 0x00;
-    // DirSize at 0x4C
+
+    // DirSize at 0x4C (13 blocks: 241..253)
     flash[rb + 0x4C] = 0x0D;
     flash[rb + 0x4D] = 0x00;
-    // Icon at 0x4E
+
+    // Icon / Sort are unused for a normal game volume.
     flash[rb + 0x4E] = 0x00;
-    // Sort at 0x4F
     flash[rb + 0x4F] = 0x00;
-    // HiddenFirst at 0x50
+
+    // HiddenFirst/HiddenSize at 0x50/0x52 (blocks 200..240)
     flash[rb + 0x50] = 0xC8;
     flash[rb + 0x51] = 0x00;
-    // HiddenSize at 0x52
     flash[rb + 0x52] = 0x29;
     flash[rb + 0x53] = 0x00;
-    // GameFirst at 0x54
+
+    // GameFirst / GameSize at 0x54 / 0x56.
+    // For a single GAME file starting at block 0, the size is 128 blocks = 65536 bytes.
     flash[rb + 0x54] = 0x00;
     flash[rb + 0x55] = 0x00;
-    // GameSize at 0x56 (128 blocks = 65536 / 512)
     flash[rb + 0x56] = 0x80;
     flash[rb + 0x57] = 0x00;
 
-    // --- FAT (block 254, offset 0x1FC00) ---
+    // FAT block 254.
     const fb: usize = 254 * 512;
-    // All entries start as 0xFF (unallocated), already set by memset
-    // Mark root block as FAT_LastInFile
+
+    // Root block and FAT block terminate their own chains as EOF.
     flash[fb + 255 * 2] = 0xFA;
     flash[fb + 255 * 2 + 1] = 0xFF;
-    // Mark FAT block itself as FAT_LastInFile
     flash[fb + 254 * 2] = 0xFA;
     flash[fb + 254 * 2 + 1] = 0xFF;
-    // Directory chain: block 253 → 252 → ... → 241 → FAT_LastInFile
+
+    // Directory chain: 253 -> 252 -> ... -> 241 -> FAT_LastInFile.
     {
         var i: u16 = 253;
         while (i > 241) : (i -= 1) {
@@ -306,13 +290,22 @@ fn initVmuFlash(cpu: *Cpu) void {
         flash[fb + 241 * 2 + 1] = 0xFF;
     }
 
-    // Directory table (blocks 241-253) is already 0xFF → all entries Type=0x00 (None)
+    // Free blocks are tagged 0xFCFF to match libevmu's FAT allocator behavior.
+    // Only the blocks that are legitimately allocated for the directory and the game
+    // remain in a non-free chain.
+    for (0..256) |b| {
+        const off: usize = fb + b * 2;
+        if (flash[off] == 0xFF and flash[off + 1] == 0xFF) {
+            flash[off] = 0xFC;
+            flash[off + 1] = 0xFF;
+        }
+    }
 }
 
 /// Initialize BIOS date and SFRs to match libevmu's EvmuRam_IBehavior_reset_().
 /// Sets PC to 0x2E1 to skip the Dreamcast serial date query (we don't emulate the serial link).
 /// Writes date to RAM and configures SFRs the BIOS expects at startup.
-fn initBiosRtc(cpu: *Cpu) void {
+fn initBiosRtc(cpu: *Cpu, bios_menu_mode: bool) void {
     // Jump past the BIOS serial date-query code (no Dreamcast serial emulation)
     cpu.pc = 0x2E1;
     // Write current date to RAM bank 0 (BCD format + binary)
@@ -346,11 +339,29 @@ fn initBiosRtc(cpu: *Cpu) void {
     cpu.sfr_raw[0x45] = 0xFF; // P1DDR: all output
     cpu.sfr_raw[0x46] = 0xBF; // P1FCR: port 1 function control
     cpu.sfr_raw[0x4D] = 0x00; // P3DDR: all input
-    cpu.sfr_raw[0x4E] = 0xFD; // P3INT: P30INT=1 (enable), P31INT=0, P32INT=1 (continuous)
-    cpu.sfr_raw[0x5C] = 0x02; // P7: P71 mask
+    cpu.sfr_raw[0x4E] = 0xFD; // P3INT: P30INT=1 + P32INT=1 => continuous button interrupt while held
+    cpu.sfr_raw[0x5C] = if (bios_menu_mode) 0x02 else 0x00; // P7: bit1=0 => standalone/auto-launch, bit1=1 => menu/normal BIOS path
     cpu.sfr_raw[0x5F] = 0xC0; // ISL: base timer clock = quartz oscillator
     cpu.sfr_raw[0x63] = 0xFC; // VSEL: default value
     cpu.sfr_raw[0x7F] = 0x41; // BTCR: BT_INT0_SRC=quartz, BT_INT0_IE=1
+}
+
+fn drawBiosMenuScreen(game_path: []const u8) void {
+    rl.clearBackground(rl.Color.black);
+    rl.drawRectangle(0, 0, LCD_W * SCALE, LCD_H * SCALE, rl.Color.black);
+    rl.drawText("SEGA", 8, 4, 14, rl.Color.white);
+    rl.drawText("Visual Memory", 8, 20, 10, rl.Color.white);
+    rl.drawText("---", 8, 30, 10, rl.Color.white);
+
+    const name = if (std.mem.lastIndexOfScalar(u8, game_path, '/')) |idx| game_path[idx + 1 ..] else game_path;
+    var y: i32 = 42;
+    rl.drawText(">", 8, y, 10, rl.Color.white);
+    var buf: [128:0]u8 = @splat(0);
+    const label = std.fmt.bufPrintZ(&buf, "{s}", .{name}) catch "GAME";
+    rl.drawText(label, 20, y, 10, rl.Color.white);
+
+    y += 12;
+    rl.drawText("MODE to launch", 8, y, 9, rl.Color.white);
 }
 
 fn renderLcd(cpu: *Cpu) void {
@@ -399,65 +410,87 @@ fn getXramByte(cpu: *Cpu, row: u32, byte_col: u32) u8 {
 }
 
 fn updateButtons(cpu: *Cpu) void {
+    const prev_buttons = cpu.p3_buttons;
     var buttons: u8 = 0xFF;
 
-    if (azerty_mode) {
-        // AZERTY: ZQSD pour le d-pad, A et B sur les touches etiquetées
-        if (rl.isKeyDown(.w)) buttons &= ~@as(u8, 0x01); // P3.0 = Up    (touche Z sur AZERTY)
-        if (rl.isKeyDown(.s)) buttons &= ~@as(u8, 0x02); // P3.1 = Down  (touche S)
-        if (rl.isKeyDown(.a)) buttons &= ~@as(u8, 0x04); // P3.2 = Left  (touche Q sur AZERTY)
-        if (rl.isKeyDown(.d)) buttons &= ~@as(u8, 0x08); // P3.3 = Right (touche D)
-        if (rl.isKeyDown(.q)) buttons &= ~@as(u8, 0x10); // P3.4 = A     (touche A sur AZERTY)
-        if (rl.isKeyDown(.b)) buttons &= ~@as(u8, 0x20); // P3.5 = B     (touche B)
+    const bios_launch_window = cpu.bios_phase == .bios_mode_0 or
+        cpu.bios_phase == .bios_mode_1 or
+        cpu.bios_phase == .bios_mode_2 or
+        cpu.bios_phase == .bios_game_launch or
+        (cpu.pc >= 0xE120 and cpu.pc <= 0xE1A0);
+
+    // Real VMU BIOS launch is edge-driven: the menu wrapper confirms on a clean MODE
+    // press, not on a stale held state. Repeating the same low level every frame makes
+    // the P3 latch stick and prevents the ROM launch wrapper from advancing.
+    const mode_key_pressed = rl.isKeyPressed(.m);
+    const title_start_pressed = rl.isKeyPressed(.enter) or rl.isKeyPressed(.space);
+    if (bios_launch_window) {
+        buttons = 0xFF;
+        if (mode_key_pressed) {
+            buttons &= ~@as(u8, 0x40); // P3.6 = MODE button
+        }
+    } else if (azerty_mode) {
+        // AZERTY: keep movement on classic arrow/d-pad keys and buttons on dedicated action keys.
+        if (rl.isKeyDown(.up) or rl.isKeyDown(.w)) buttons &= ~@as(u8, 0x01); // Up
+        if (rl.isKeyDown(.down) or rl.isKeyDown(.s)) buttons &= ~@as(u8, 0x02); // Down
+        if (rl.isKeyDown(.left) or rl.isKeyDown(.a)) buttons &= ~@as(u8, 0x04); // Left
+        if (rl.isKeyDown(.right) or rl.isKeyDown(.d)) buttons &= ~@as(u8, 0x08); // Right
+        if (rl.isKeyDown(.q) or rl.isKeyDown(.z)) buttons &= ~@as(u8, 0x10); // A
+        if (rl.isKeyDown(.b) or rl.isKeyDown(.x)) buttons &= ~@as(u8, 0x20); // B
     } else {
-        // QWERTY: fleches + Z/X
-        if (rl.isKeyDown(.up)) buttons &= ~@as(u8, 0x01); // P3.0 = Up
-        if (rl.isKeyDown(.down)) buttons &= ~@as(u8, 0x02); // P3.1 = Down
-        if (rl.isKeyDown(.left)) buttons &= ~@as(u8, 0x04); // P3.2 = Left
-        if (rl.isKeyDown(.right)) buttons &= ~@as(u8, 0x08); // P3.3 = Right
-        if (rl.isKeyDown(.z)) buttons &= ~@as(u8, 0x10); // P3.4 = A
-        if (rl.isKeyDown(.x)) buttons &= ~@as(u8, 0x20); // P3.5 = B
+        // Standard mapping: movement on arrows/WASD, action buttons on Z/X.
+        if (rl.isKeyDown(.up) or rl.isKeyDown(.w)) buttons &= ~@as(u8, 0x01); // Up
+        if (rl.isKeyDown(.down) or rl.isKeyDown(.s)) buttons &= ~@as(u8, 0x02); // Down
+        if (rl.isKeyDown(.left) or rl.isKeyDown(.a)) buttons &= ~@as(u8, 0x04); // Left
+        if (rl.isKeyDown(.right) or rl.isKeyDown(.d)) buttons &= ~@as(u8, 0x08); // Right
+        if (rl.isKeyDown(.z) or rl.isKeyDown(.k)) buttons &= ~@as(u8, 0x10); // A
+        if (rl.isKeyDown(.x) or rl.isKeyDown(.l)) buttons &= ~@as(u8, 0x20); // B
     }
 
-    // Communs aux deux modes
-    if (rl.isKeyDown(.enter) or rl.isKeyDown(.space) or rl.isKeyDown(.m) or rl.isKeyDown(.semicolon)) buttons &= ~@as(u8, 0x40); // P3.6 = Mode (Entrée = Start)
-    if (rl.isKeyDown(.n)) buttons &= ~@as(u8, 0x80); // P3.7 = Sleep
-
-    if (buttons != cpu.p3_buttons) {
-        std.debug.print("BUTTONS: {X:0>2} -> {X:0>2} (PC={X:0>4})", .{ cpu.p3_buttons, buttons, cpu.pc });
-    }
-    cpu.p3_buttons = buttons;
-
-    // libevmu EvmuGamepad_pollButtons_ / DreamPotato once-per-frame: set P31INT if
-    // a button is pressed while continuous mode (P32INT) is enabled.
-    var p3int = cpu.sfr_raw[0x4E]; // P3INT
-    const p32int = p3int & 0x04 != 0; // P32INT: 1=continuous, 0=edge
-
-    if (buttons != 0xFF) { // any button pressed
-        if (p32int) { // continuous mode
-            p3int |= 0x02; // set P31INT source flag
-            cpu.sfr_raw[0x4E] = p3int;
+    // Title screen Start is a distinct press edge. Never auto-send Start when the game is
+    // just booting into flash0; otherwise the title screen is skipped and the game jumps to
+    // the post-title state without user input.
+    if (!bios_launch_window and cpu.inst_bank.bank_id == .flash0) {
+        if (title_start_pressed) {
+            buttons &= ~@as(u8, 0x40); // P3.6 = Start pulse
+            start_pulse_frames = 1;
+        } else if (start_pulse_frames > 0) {
+            buttons &= ~@as(u8, 0x40);
+            start_pulse_frames -= 1;
         }
     }
-    // Reset $70 (Buttons_Current) on release so next press generates a rising edge
-    // for the BIOS's edge-detection (P3 ISR at 0x1F35 keeps $70/$72).
+    if (!bios_launch_window and cpu.inst_bank.bank_id == .rom and rl.isKeyDown(.n)) buttons &= ~@as(u8, 0x80); // P3.7 = Sleep only in BIOS
+
+    cpu.prev_p3_buttons = prev_buttons;
+    cpu.p3_buttons = buttons;
+    cpu.ram_bank0[0x70] = buttons;
+
+    // Match the BIOS harness: during the launch menu, a held MODE state must assert
+    // P31INT directly so the ROM launch wrapper can continue. Keep the generic logic
+    // for other buttons, but do not rely on it for BIOS selection confirmation.
+    var p3int = cpu.sfr_raw[0x4E]; // P3INT
+    const p30int = p3int & 0x01 != 0; // P30INT: enable interrupt
+    const p32int = p3int & 0x04 != 0; // P32INT: 1=continuous, 0=edge
+    const any_pressed = buttons != 0xFF;
+    // MODE is a single valid edge pulse during BIOS launch; do not keep asserting P31INT
+    // on every frame after a stale low-level latch remains on the port.
+    const force_bios_mode_int = bios_launch_window and mode_key_pressed;
+
+    if (p30int and ((p32int and any_pressed) or force_bios_mode_int)) {
+        p3int |= 0x02; // set P31INT source flag only for a valid BIOS launch edge
+    } else {
+        // A stale source flag blocks the next valid press and makes the BIOS loop on the
+        // same interrupt forever. Clear it when the button is released or the launch window
+        // is no longer asserting a valid low-level P3 input.
+        p3int &= ~@as(u8, 0x02);
+    }
+
+    cpu.sfr_raw[0x4E] = p3int;
+    // VMU P3 is active-low: 0xFF means no buttons pressed. Writing 0x00 here would
+    // falsely assert every button at once and make the game see a spurious all-keys
+    // press/release pattern instead of a stable held directional input.
     if (buttons == 0xFF) {
-        cpu.ram_bank0[0x70] = 0x00;
+        cpu.ram_bank0[0x70] = 0xFF;
     }
 }
 
-fn flushLogFile(init: std.process.Init) void {
-    const data = dbg.getLogData();
-    if (data.len == 0) return;
-    const dir = std.Io.Dir.cwd();
-    const file = dir.createFile(init.io, "vmu_trace.log", .{ .truncate = false }) catch |err| {
-        std.debug.print("Cannot create vmu_trace.log: {}\n", .{err});
-        return;
-    };
-    defer file.close(init.io);
-    const pos = file.length(init.io) catch 0;
-    file.writePositionalAll(init.io, data, pos) catch |err| {
-        std.debug.print("Cannot write vmu_trace.log: {}\n", .{err});
-    };
-    std.debug.print("Trace log written: {d} bytes -> vmu_trace.log\n", .{data.len});
-}

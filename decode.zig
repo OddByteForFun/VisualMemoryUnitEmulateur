@@ -562,9 +562,6 @@ pub fn step(cpu: *Cpu) u8 {
                 else => unreachable,
             };
             cpu.store8(addr, new);
-            if (addr == 0x10D) {
-                dbg.log("EXT MODIFIED: {s} addr=0x{X:0>3} bit={d} old={X:0>2} new={X:0>2} pending={X:0>2} PC={X:0>4}", .{ @tagName(dec.inst), addr, bit, old, new, cpu.pending_ext, cpu.pc -% 2 });
-            }
         },
         .callf => {
             const hi = cpu.fetch8();

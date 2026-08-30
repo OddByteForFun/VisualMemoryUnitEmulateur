@@ -750,6 +750,18 @@ test "VMC-197 JMPF example 1" {
     try testing.expectEqual(@as(u16, 0xF0E), cpu.pc);
 }
 
+test "EXT 0x88 selects flash0 bank" {
+    var rom: [65536]u8 = undefined;
+    var cpu = makeCpu(&rom);
+    cpu.pending_ext = 0x88;
+    cpu.syncInstructionBank();
+    try testing.expect(cpu.inst_bank.bank_id == .flash0);
+    try testing.expect(cpu.inst_bank.data.len == 65536);
+    cpu.pending_ext = 0x80;
+    cpu.syncInstructionBank();
+    try testing.expect(cpu.inst_bank.bank_id == .rom);
+}
+
 test "VMC-200 BZ taken (ACC=0)" {
     var rom: [65536]u8 = undefined;
     var cpu = makeCpu(&rom);
