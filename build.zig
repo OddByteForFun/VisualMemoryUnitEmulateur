@@ -10,19 +10,12 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    const isa_mod = b.createModule(.{
-        .root_source_file = b.path("isa.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-
     const decode_mod = b.createModule(.{
         .root_source_file = b.path("decode.zig"),
         .target = target,
         .optimize = optimize,
     });
     decode_mod.addImport("lc86K", lc86K_mod);
-    decode_mod.addImport("isa", isa_mod);
 
     const debug_mod = b.createModule(.{
         .root_source_file = b.path("debug.zig"),
@@ -30,7 +23,6 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     debug_mod.addImport("lc86K", lc86K_mod);
-    debug_mod.addImport("isa", isa_mod);
 
     decode_mod.addImport("debug", debug_mod);
 
@@ -42,14 +34,6 @@ pub fn build(b: *std.Build) void {
     main_mod.addImport("lc86K", lc86K_mod);
     main_mod.addImport("decode", decode_mod);
     main_mod.addImport("debug", debug_mod);
-
-    const vmu_mod = b.createModule(.{
-        .root_source_file = b.path("vmu.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    vmu_mod.addImport("lc86K", lc86K_mod);
-    main_mod.addImport("vmu", vmu_mod);
 
     const raylib_dep = b.dependency("raylib_zig", .{
         .target = target,
@@ -81,9 +65,6 @@ pub fn build(b: *std.Build) void {
     });
     test_mod.addImport("lc86K", lc86K_mod);
     test_mod.addImport("decode", decode_mod);
-    test_mod.addImport("isa", isa_mod);
-    test_mod.addImport("debug", debug_mod);
-    test_mod.addImport("vmu", vmu_mod);
 
     const tests = b.addTest(.{ .root_module = test_mod });
     const run_tests = b.addRunArtifact(tests);

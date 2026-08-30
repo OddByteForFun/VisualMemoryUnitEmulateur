@@ -1,14 +1,88 @@
 const std = @import("std");
 const Cpu = @import("lc86K").Cpu;
 const dbg = @import("debug");
-const isa = @import("isa");
 
 // https://mc.pp.se/dc/vms/cpu.html
 
-// Encodage ISA déplacé dans isa.zig (source unique) ; réexporté ici
-// pour préserver les noms existants.
-pub const AddressingMode = isa.AddressingMode;
-pub const Inst = isa.Inst;
+pub const AddressingMode = enum(u2) {
+    impl,
+    imm,
+    d9,
+    ri,
+};
+
+pub const Inst = enum(u8) {
+    nop,
+    br,
+    ld,
+    ld_ri,
+    call_a12,
+    callr,
+    brf,
+    st,
+    st_ri,
+    callf,
+    jmpf,
+    mov,
+    mov_ri,
+    jmp_a12,
+    mul,
+    be_imm,
+    be_d9,
+    be_ri,
+    div,
+    bne_imm,
+    bne_d9,
+    bne_ri,
+    bpc,
+    dbnz_d9,
+    dbnz_ri,
+    push,
+    inc_d9,
+    inc_ri,
+    bp,
+    pop,
+    dec_d9,
+    dec_ri,
+    bz,
+    add_imm,
+    add_d9,
+    add_ri,
+    bn,
+    bnz,
+    addc_imm,
+    addc_d9,
+    addc_ri,
+    ret,
+    sub_imm,
+    sub_d9,
+    sub_ri,
+    not1,
+    reti,
+    subc_imm,
+    subc_d9,
+    subc_ri,
+    ror,
+    ldc,
+    ldf,
+    stf,
+    xch_d9,
+    xch_ri,
+    clr1,
+    rorc,
+    or_imm,
+    or_d9,
+    or_ri,
+    rol,
+    and_imm,
+    and_d9,
+    and_ri,
+    set1,
+    rolc,
+    xor_imm,
+    xor_d9,
+    xor_ri,
+};
 
 pub const DecodeResult = struct {
     inst: Inst,
@@ -19,13 +93,170 @@ pub const DecodeResult = struct {
 };
 
 fn decodeOpcode(opcode: u8) DecodeResult {
-    const e = isa.entry(opcode);
-    return .{
-        .inst = e.inst,
-        .opcode = opcode,
-        .mode = e.mode,
-        .ri = e.ri,
-        .bit = e.bit,
+    const row: u4 = @truncate(opcode >> 4);
+    const col: u4 = @truncate(opcode);
+    return switch (row) {
+        0x0 => switch (col) {
+            0x0 => .{ .inst = .nop, .opcode = opcode },
+            0x1 => .{ .inst = .br, .opcode = opcode, .mode = .imm },
+            0x2...0x3 => .{ .inst = .ld, .opcode = opcode, .mode = .d9 },
+            0x4...0x7 => .{ .inst = .ld_ri, .opcode = opcode, .mode = .ri, .ri = col & 0x3 },
+            0x8...0xF => .{ .inst = .call_a12, .opcode = opcode, .mode = .imm },
+        },
+        0x1 => switch (col) {
+            0x0 => .{ .inst = .callr, .opcode = opcode, .mode = .imm },
+            0x1 => .{ .inst = .brf, .opcode = opcode, .mode = .imm },
+            0x2...0x3 => .{ .inst = .st, .opcode = opcode, .mode = .d9 },
+            0x4...0x7 => .{ .inst = .st_ri, .opcode = opcode, .mode = .ri, .ri = col & 0x3 },
+            0x8...0xF => .{ .inst = .call_a12, .opcode = opcode, .mode = .imm },
+        },
+        0x2 => switch (col) {
+            0x0 => .{ .inst = .callf, .opcode = opcode, .mode = .imm },
+            0x1 => .{ .inst = .jmpf, .opcode = opcode, .mode = .imm },
+            0x2...0x3 => .{ .inst = .mov, .opcode = opcode, .mode = .d9 },
+            0x4...0x7 => .{ .inst = .mov_ri, .opcode = opcode, .mode = .ri, .ri = col & 0x3 },
+            0x8...0xF => .{ .inst = .jmp_a12, .opcode = opcode, .mode = .imm },
+        },
+        0x3 => switch (col) {
+            0x0 => .{ .inst = .mul, .opcode = opcode },
+            0x1 => .{ .inst = .be_imm, .opcode = opcode, .mode = .imm },
+            0x2...0x3 => .{ .inst = .be_d9, .opcode = opcode, .mode = .d9 },
+            0x4...0x7 => .{ .inst = .be_ri, .opcode = opcode, .mode = .ri, .ri = col & 0x3 },
+            0x8...0xF => .{ .inst = .jmp_a12, .opcode = opcode, .mode = .imm },
+        },
+        0x4 => switch (col) {
+            0x0 => .{ .inst = .div, .opcode = opcode },
+            0x1 => .{ .inst = .bne_imm, .opcode = opcode, .mode = .imm },
+            0x2...0x3 => .{ .inst = .bne_d9, .opcode = opcode, .mode = .d9 },
+            0x4...0x7 => .{ .inst = .bne_ri, .opcode = opcode, .mode = .ri, .ri = col & 0x3 },
+            0x8...0xF => .{ .inst = .bpc, .opcode = opcode, .mode = .d9, .bit = opcode & 0x7 },
+        },
+        0x5 => switch (col) {
+            0x0 => .{ .inst = .ldf, .opcode = opcode },
+            0x1 => .{ .inst = .stf, .opcode = opcode },
+            0x2...0x3 => .{ .inst = .dbnz_d9, .opcode = opcode, .mode = .d9 },
+            0x4...0x7 => .{ .inst = .dbnz_ri, .opcode = opcode, .mode = .ri, .ri = col & 0x3 },
+            0x8...0xF => .{ .inst = .bpc, .opcode = opcode, .mode = .d9, .bit = opcode & 0x7 },
+        },
+        0x6 => switch (col) {
+            0x0...0x1 => .{ .inst = .push, .opcode = opcode, .mode = .d9 },
+            0x2...0x3 => .{ .inst = .inc_d9, .opcode = opcode, .mode = .d9 },
+            0x4...0x7 => .{ .inst = .inc_ri, .opcode = opcode, .mode = .ri, .ri = col & 0x3 },
+            0x8...0xF => .{ .inst = .bp, .opcode = opcode, .mode = .d9, .bit = opcode & 0x7 },
+        },
+        0x7 => switch (col) {
+            0x0...0x1 => .{ .inst = .pop, .opcode = opcode, .mode = .d9 },
+            0x2...0x3 => .{ .inst = .dec_d9, .opcode = opcode, .mode = .d9 },
+            0x4...0x7 => .{ .inst = .dec_ri, .opcode = opcode, .mode = .ri, .ri = col & 0x3 },
+            0x8...0xF => .{ .inst = .bp, .opcode = opcode, .mode = .d9, .bit = opcode & 0x7 },
+        },
+        0x8 => switch (col) {
+            0x0 => .{ .inst = .bz, .opcode = opcode, .mode = .imm },
+            0x1 => .{ .inst = .add_imm, .opcode = opcode, .mode = .imm },
+            0x2...0x3 => .{ .inst = .add_d9, .opcode = opcode, .mode = .d9 },
+            0x4...0x7 => .{ .inst = .add_ri, .opcode = opcode, .mode = .ri, .ri = col & 0x3 },
+            0x8...0xF => .{ .inst = .bn, .opcode = opcode, .mode = .d9, .bit = opcode & 0x7 },
+        },
+        0x9 => switch (col) {
+            0x0 => .{ .inst = .bnz, .opcode = opcode, .mode = .imm },
+            0x1 => .{ .inst = .addc_imm, .opcode = opcode, .mode = .imm },
+            0x2...0x3 => .{ .inst = .addc_d9, .opcode = opcode, .mode = .d9 },
+            0x4...0x7 => .{ .inst = .addc_ri, .opcode = opcode, .mode = .ri, .ri = col & 0x3 },
+            0x8...0xF => .{ .inst = .bn, .opcode = opcode, .mode = .d9, .bit = opcode & 0x7 },
+        },
+        0xA => switch (col) {
+            0x0 => .{ .inst = .ret, .opcode = opcode },
+            0x1 => .{ .inst = .sub_imm, .opcode = opcode, .mode = .imm },
+            0x2...0x3 => .{ .inst = .sub_d9, .opcode = opcode, .mode = .d9 },
+            0x4...0x7 => .{ .inst = .sub_ri, .opcode = opcode, .mode = .ri, .ri = col & 0x3 },
+            0x8...0xF => .{ .inst = .not1, .opcode = opcode, .mode = .d9, .bit = opcode & 0x7 },
+        },
+        0xB => switch (col) {
+            0x0 => .{ .inst = .reti, .opcode = opcode },
+            0x1 => .{ .inst = .subc_imm, .opcode = opcode, .mode = .imm },
+            0x2...0x3 => .{ .inst = .subc_d9, .opcode = opcode, .mode = .d9 },
+            0x4...0x7 => .{ .inst = .subc_ri, .opcode = opcode, .mode = .ri, .ri = col & 0x3 },
+            0x8...0xF => .{ .inst = .not1, .opcode = opcode, .mode = .d9, .bit = opcode & 0x7 },
+        },
+        0xC => switch (col) {
+            0x0 => .{ .inst = .ror, .opcode = opcode },
+            0x1 => .{ .inst = .ldc, .opcode = opcode },
+            0x2...0x3 => .{ .inst = .xch_d9, .opcode = opcode, .mode = .d9 },
+            0x4...0x7 => .{ .inst = .xch_ri, .opcode = opcode, .mode = .ri, .ri = col & 0x3 },
+            0x8...0xF => .{ .inst = .clr1, .opcode = opcode, .mode = .d9, .bit = opcode & 0x7 },
+        },
+        0xD => switch (col) {
+            0x0 => .{ .inst = .rorc, .opcode = opcode },
+            0x1 => .{ .inst = .or_imm, .opcode = opcode, .mode = .imm },
+            0x2...0x3 => .{ .inst = .or_d9, .opcode = opcode, .mode = .d9 },
+            0x4...0x7 => .{ .inst = .or_ri, .opcode = opcode, .mode = .ri, .ri = col & 0x3 },
+            0x8...0xF => .{ .inst = .clr1, .opcode = opcode, .mode = .d9, .bit = opcode & 0x7 },
+        },
+        0xE => switch (col) {
+            0x0 => .{ .inst = .rol, .opcode = opcode },
+            0x1 => .{ .inst = .and_imm, .opcode = opcode, .mode = .imm },
+            0x2...0x3 => .{ .inst = .and_d9, .opcode = opcode, .mode = .d9 },
+            0x4...0x7 => .{ .inst = .and_ri, .opcode = opcode, .mode = .ri, .ri = col & 0x3 },
+            0x8...0xF => .{ .inst = .set1, .opcode = opcode, .mode = .d9, .bit = opcode & 0x7 },
+        },
+        0xF => switch (col) {
+            0x0 => .{ .inst = .rolc, .opcode = opcode },
+            0x1 => .{ .inst = .xor_imm, .opcode = opcode, .mode = .imm },
+            0x2...0x3 => .{ .inst = .xor_d9, .opcode = opcode, .mode = .d9 },
+            0x4...0x7 => .{ .inst = .xor_ri, .opcode = opcode, .mode = .ri, .ri = col & 0x3 },
+            0x8...0xF => .{ .inst = .set1, .opcode = opcode, .mode = .d9, .bit = opcode & 0x7 },
+        },
+    };
+}
+
+fn cycles(dec: DecodeResult) u8 {
+    return switch (dec.inst) {
+        .nop => 1,
+        .br => 2,
+        .ld, .ld_ri => 1,
+        .call_a12 => 2,
+        .callr => 4,
+        .brf => 4,
+        .st, .st_ri => 1,
+        .callf => 2,
+        .jmpf => 2,
+        .mov => 2,
+        .mov_ri => 1,
+        .jmp_a12 => 2,
+        .mul => 7,
+        .be_imm, .be_d9, .be_ri => 2,
+        .div => 7,
+        .bne_imm, .bne_d9, .bne_ri => 2,
+        .bpc => 2,
+        .dbnz_d9, .dbnz_ri => 2,
+        .push => 2,
+        .inc_d9, .inc_ri => 1,
+        .bp => 2,
+        .pop => 2,
+        .dec_d9, .dec_ri => 1,
+        .bz => 2,
+        .add_imm, .add_d9, .add_ri => 1,
+        .bn => 2,
+        .bnz => 2,
+        .addc_imm, .addc_d9, .addc_ri => 1,
+        .ret => 2,
+        .sub_imm, .sub_d9, .sub_ri => 1,
+        .not1 => 1,
+        .reti => 2,
+        .subc_imm, .subc_d9, .subc_ri => 1,
+        .ror => 1,
+        .ldc => 2,
+        .ldf => 2,
+        .stf => 2,
+        .xch_d9, .xch_ri => 1,
+        .clr1 => 1,
+        .rorc => 1,
+        .or_imm, .or_d9, .or_ri => 1,
+        .rol => 1,
+        .and_imm, .and_d9, .and_ri => 1,
+        .set1 => 1,
+        .rolc => 1,
+        .xor_imm, .xor_d9, .xor_ri => 1,
     };
 }
 
@@ -42,7 +273,7 @@ pub fn step(cpu: *Cpu) u8 {
         if (cpu.halted and cpu.p3_buttons != old_p3) {
             if (dbg.log_level == .trace) {
                 dbg.log("P3 WAKEUP: P3={X:0>2}->{X:0>2} PC={X:0>4} P3INT={X:0>2}", .{
-                    old_p3, cpu.p3_buttons, cpu.pc, cpu.sfr_raw[Cpu.SFR_P3INT],
+                    old_p3, cpu.p3_buttons, cpu.pc, cpu.sfr_raw[0x4E],
                 });
             }
             cpu.halted = false;
@@ -50,13 +281,13 @@ pub fn step(cpu: *Cpu) u8 {
 
         if (cpu.p3_buttons != old_p3 or dbg.halt_sample == 0) {
             if (dbg.log_level == .trace) {
-                const p3int = cpu.sfr_raw[Cpu.SFR_P3INT];
+                const p3int = cpu.sfr_raw[0x4E];
                 dbg.log("HALT PC={X:0>4} P3={X:0>2}->{X:0>2} P3INT={X:0>2} IE={X:0>2} depth={d} blocked={d} halted={}", .{
                     cpu.pc,
                     old_p3,
                     cpu.p3_buttons,
                     p3int,
-                    cpu.sfr_raw[Cpu.SFR_IE],
+                    cpu.sfr_raw[0x08],
                     cpu.interrupt_depth,
                     cpu.interrupt_blocked,
                     cpu.halted,
@@ -410,21 +641,26 @@ pub fn step(cpu: *Cpu) u8 {
             }
         },
     }
-    const used = isa.entry(dec.opcode).cycles;
+    const used = cycles(dec);
     cpu.tickTimers(used);
     cpu.requestLevelDrivenInterrupts();
     cpu.servicePendingInterrupt();
-    _ = dbg.checkBiosPhase(cpu);
+    if (cpu.checkBiosPhase()) |phase| {
+        if (dbg.log_level == .trace) {
+            std.debug.print("[BIOS] Phase: {s} (PC=0x{X:0>4})\n", .{ @tagName(phase), cpu.pc });
+        }
+        dbg.log("[BIOS] Phase: {s} (PC=0x{X:0>4})", .{ @tagName(phase), cpu.pc });
+    }
 
     if (cpu.halted and dec.inst != .nop) {
         if (dbg.log_level == .trace) {
             dbg.log(">>> HALT at PC={X:0>4} IE={X:0>2} BTCR={X:0>2} T0CNT={X:0>2} T1CNT={X:0>2} P3INT={X:0>2} P3={X:0>2} prevP3={X:0>2}", .{
                 cpu.pc,
-                cpu.sfr_raw[Cpu.SFR_IE],
-                cpu.sfr_raw[Cpu.SFR_BTCR],
-                cpu.sfr_raw[Cpu.SFR_T0CNT],
-                cpu.sfr_raw[Cpu.SFR_T1CNT],
-                cpu.sfr_raw[Cpu.SFR_P3INT],
+                cpu.sfr_raw[0x08],
+                cpu.sfr_raw[0x7F],
+                cpu.sfr_raw[0x10],
+                cpu.sfr_raw[0x18],
+                cpu.sfr_raw[0x4E],
                 cpu.p3_buttons,
                 cpu.prev_p3_buttons,
             });
