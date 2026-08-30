@@ -10,3 +10,9 @@ timer_impl.md
 roms/
 zig-pkg/
 vmu_trace.log
+
+# BMAD
+_bmad/
+_bmad-output/
+.agents/skills/
+.opencode/

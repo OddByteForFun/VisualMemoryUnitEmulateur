@@ -14,7 +14,7 @@
 | `lc86K.zig` | Définition du CPU (registres, mémoire, timers, interruptions, SFRs) |
 | `decode.zig` | Décodeur/exécuteur des 70 instructions + compteur de cycles |
 | `debug.zig` | Logging, désassembleur, détection de boucle |
-| `tests.zig` | 44 tests unitaires |
+| `tests.zig` | 92 tests unitaires |
 
 ---
 
