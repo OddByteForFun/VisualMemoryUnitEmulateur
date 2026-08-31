@@ -1,263 +1,19 @@
 const std = @import("std");
 const Cpu = @import("lc86K").Cpu;
 const dbg = @import("debug");
+const isa = @import("isa");
 
 // https://mc.pp.se/dc/vms/cpu.html
+// L'encodage des opcodes, Inst et AddressingMode viennent d'isa.zig (source unique).
 
-pub const AddressingMode = enum(u2) {
-    impl,
-    imm,
-    d9,
-    ri,
-};
-
-pub const Inst = enum(u8) {
-    nop,
-    br,
-    ld,
-    ld_ri,
-    call_a12,
-    callr,
-    brf,
-    st,
-    st_ri,
-    callf,
-    jmpf,
-    mov,
-    mov_ri,
-    jmp_a12,
-    mul,
-    be_imm,
-    be_d9,
-    be_ri,
-    div,
-    bne_imm,
-    bne_d9,
-    bne_ri,
-    bpc,
-    dbnz_d9,
-    dbnz_ri,
-    push,
-    inc_d9,
-    inc_ri,
-    bp,
-    pop,
-    dec_d9,
-    dec_ri,
-    bz,
-    add_imm,
-    add_d9,
-    add_ri,
-    bn,
-    bnz,
-    addc_imm,
-    addc_d9,
-    addc_ri,
-    ret,
-    sub_imm,
-    sub_d9,
-    sub_ri,
-    not1,
-    reti,
-    subc_imm,
-    subc_d9,
-    subc_ri,
-    ror,
-    ldc,
-    ldf,
-    stf,
-    xch_d9,
-    xch_ri,
-    clr1,
-    rorc,
-    or_imm,
-    or_d9,
-    or_ri,
-    rol,
-    and_imm,
-    and_d9,
-    and_ri,
-    set1,
-    rolc,
-    xor_imm,
-    xor_d9,
-    xor_ri,
-};
-
-pub const DecodeResult = struct {
-    inst: Inst,
-    opcode: u8,
-    mode: AddressingMode = .impl,
-    ri: ?u8 = null,
-    bit: ?u8 = null,
-};
+pub const DecodeResult = isa.IsaEntry;
 
 fn decodeOpcode(opcode: u8) DecodeResult {
-    const row: u4 = @truncate(opcode >> 4);
-    const col: u4 = @truncate(opcode);
-    return switch (row) {
-        0x0 => switch (col) {
-            0x0 => .{ .inst = .nop, .opcode = opcode },
-            0x1 => .{ .inst = .br, .opcode = opcode, .mode = .imm },
-            0x2...0x3 => .{ .inst = .ld, .opcode = opcode, .mode = .d9 },
-            0x4...0x7 => .{ .inst = .ld_ri, .opcode = opcode, .mode = .ri, .ri = col & 0x3 },
-            0x8...0xF => .{ .inst = .call_a12, .opcode = opcode, .mode = .imm },
-        },
-        0x1 => switch (col) {
-            0x0 => .{ .inst = .callr, .opcode = opcode, .mode = .imm },
-            0x1 => .{ .inst = .brf, .opcode = opcode, .mode = .imm },
-            0x2...0x3 => .{ .inst = .st, .opcode = opcode, .mode = .d9 },
-            0x4...0x7 => .{ .inst = .st_ri, .opcode = opcode, .mode = .ri, .ri = col & 0x3 },
-            0x8...0xF => .{ .inst = .call_a12, .opcode = opcode, .mode = .imm },
-        },
-        0x2 => switch (col) {
-            0x0 => .{ .inst = .callf, .opcode = opcode, .mode = .imm },
-            0x1 => .{ .inst = .jmpf, .opcode = opcode, .mode = .imm },
-            0x2...0x3 => .{ .inst = .mov, .opcode = opcode, .mode = .d9 },
-            0x4...0x7 => .{ .inst = .mov_ri, .opcode = opcode, .mode = .ri, .ri = col & 0x3 },
-            0x8...0xF => .{ .inst = .jmp_a12, .opcode = opcode, .mode = .imm },
-        },
-        0x3 => switch (col) {
-            0x0 => .{ .inst = .mul, .opcode = opcode },
-            0x1 => .{ .inst = .be_imm, .opcode = opcode, .mode = .imm },
-            0x2...0x3 => .{ .inst = .be_d9, .opcode = opcode, .mode = .d9 },
-            0x4...0x7 => .{ .inst = .be_ri, .opcode = opcode, .mode = .ri, .ri = col & 0x3 },
-            0x8...0xF => .{ .inst = .jmp_a12, .opcode = opcode, .mode = .imm },
-        },
-        0x4 => switch (col) {
-            0x0 => .{ .inst = .div, .opcode = opcode },
-            0x1 => .{ .inst = .bne_imm, .opcode = opcode, .mode = .imm },
-            0x2...0x3 => .{ .inst = .bne_d9, .opcode = opcode, .mode = .d9 },
-            0x4...0x7 => .{ .inst = .bne_ri, .opcode = opcode, .mode = .ri, .ri = col & 0x3 },
-            0x8...0xF => .{ .inst = .bpc, .opcode = opcode, .mode = .d9, .bit = opcode & 0x7 },
-        },
-        0x5 => switch (col) {
-            0x0 => .{ .inst = .ldf, .opcode = opcode },
-            0x1 => .{ .inst = .stf, .opcode = opcode },
-            0x2...0x3 => .{ .inst = .dbnz_d9, .opcode = opcode, .mode = .d9 },
-            0x4...0x7 => .{ .inst = .dbnz_ri, .opcode = opcode, .mode = .ri, .ri = col & 0x3 },
-            0x8...0xF => .{ .inst = .bpc, .opcode = opcode, .mode = .d9, .bit = opcode & 0x7 },
-        },
-        0x6 => switch (col) {
-            0x0...0x1 => .{ .inst = .push, .opcode = opcode, .mode = .d9 },
-            0x2...0x3 => .{ .inst = .inc_d9, .opcode = opcode, .mode = .d9 },
-            0x4...0x7 => .{ .inst = .inc_ri, .opcode = opcode, .mode = .ri, .ri = col & 0x3 },
-            0x8...0xF => .{ .inst = .bp, .opcode = opcode, .mode = .d9, .bit = opcode & 0x7 },
-        },
-        0x7 => switch (col) {
-            0x0...0x1 => .{ .inst = .pop, .opcode = opcode, .mode = .d9 },
-            0x2...0x3 => .{ .inst = .dec_d9, .opcode = opcode, .mode = .d9 },
-            0x4...0x7 => .{ .inst = .dec_ri, .opcode = opcode, .mode = .ri, .ri = col & 0x3 },
-            0x8...0xF => .{ .inst = .bp, .opcode = opcode, .mode = .d9, .bit = opcode & 0x7 },
-        },
-        0x8 => switch (col) {
-            0x0 => .{ .inst = .bz, .opcode = opcode, .mode = .imm },
-            0x1 => .{ .inst = .add_imm, .opcode = opcode, .mode = .imm },
-            0x2...0x3 => .{ .inst = .add_d9, .opcode = opcode, .mode = .d9 },
-            0x4...0x7 => .{ .inst = .add_ri, .opcode = opcode, .mode = .ri, .ri = col & 0x3 },
-            0x8...0xF => .{ .inst = .bn, .opcode = opcode, .mode = .d9, .bit = opcode & 0x7 },
-        },
-        0x9 => switch (col) {
-            0x0 => .{ .inst = .bnz, .opcode = opcode, .mode = .imm },
-            0x1 => .{ .inst = .addc_imm, .opcode = opcode, .mode = .imm },
-            0x2...0x3 => .{ .inst = .addc_d9, .opcode = opcode, .mode = .d9 },
-            0x4...0x7 => .{ .inst = .addc_ri, .opcode = opcode, .mode = .ri, .ri = col & 0x3 },
-            0x8...0xF => .{ .inst = .bn, .opcode = opcode, .mode = .d9, .bit = opcode & 0x7 },
-        },
-        0xA => switch (col) {
-            0x0 => .{ .inst = .ret, .opcode = opcode },
-            0x1 => .{ .inst = .sub_imm, .opcode = opcode, .mode = .imm },
-            0x2...0x3 => .{ .inst = .sub_d9, .opcode = opcode, .mode = .d9 },
-            0x4...0x7 => .{ .inst = .sub_ri, .opcode = opcode, .mode = .ri, .ri = col & 0x3 },
-            0x8...0xF => .{ .inst = .not1, .opcode = opcode, .mode = .d9, .bit = opcode & 0x7 },
-        },
-        0xB => switch (col) {
-            0x0 => .{ .inst = .reti, .opcode = opcode },
-            0x1 => .{ .inst = .subc_imm, .opcode = opcode, .mode = .imm },
-            0x2...0x3 => .{ .inst = .subc_d9, .opcode = opcode, .mode = .d9 },
-            0x4...0x7 => .{ .inst = .subc_ri, .opcode = opcode, .mode = .ri, .ri = col & 0x3 },
-            0x8...0xF => .{ .inst = .not1, .opcode = opcode, .mode = .d9, .bit = opcode & 0x7 },
-        },
-        0xC => switch (col) {
-            0x0 => .{ .inst = .ror, .opcode = opcode },
-            0x1 => .{ .inst = .ldc, .opcode = opcode },
-            0x2...0x3 => .{ .inst = .xch_d9, .opcode = opcode, .mode = .d9 },
-            0x4...0x7 => .{ .inst = .xch_ri, .opcode = opcode, .mode = .ri, .ri = col & 0x3 },
-            0x8...0xF => .{ .inst = .clr1, .opcode = opcode, .mode = .d9, .bit = opcode & 0x7 },
-        },
-        0xD => switch (col) {
-            0x0 => .{ .inst = .rorc, .opcode = opcode },
-            0x1 => .{ .inst = .or_imm, .opcode = opcode, .mode = .imm },
-            0x2...0x3 => .{ .inst = .or_d9, .opcode = opcode, .mode = .d9 },
-            0x4...0x7 => .{ .inst = .or_ri, .opcode = opcode, .mode = .ri, .ri = col & 0x3 },
-            0x8...0xF => .{ .inst = .clr1, .opcode = opcode, .mode = .d9, .bit = opcode & 0x7 },
-        },
-        0xE => switch (col) {
-            0x0 => .{ .inst = .rol, .opcode = opcode },
-            0x1 => .{ .inst = .and_imm, .opcode = opcode, .mode = .imm },
-            0x2...0x3 => .{ .inst = .and_d9, .opcode = opcode, .mode = .d9 },
-            0x4...0x7 => .{ .inst = .and_ri, .opcode = opcode, .mode = .ri, .ri = col & 0x3 },
-            0x8...0xF => .{ .inst = .set1, .opcode = opcode, .mode = .d9, .bit = opcode & 0x7 },
-        },
-        0xF => switch (col) {
-            0x0 => .{ .inst = .rolc, .opcode = opcode },
-            0x1 => .{ .inst = .xor_imm, .opcode = opcode, .mode = .imm },
-            0x2...0x3 => .{ .inst = .xor_d9, .opcode = opcode, .mode = .d9 },
-            0x4...0x7 => .{ .inst = .xor_ri, .opcode = opcode, .mode = .ri, .ri = col & 0x3 },
-            0x8...0xF => .{ .inst = .set1, .opcode = opcode, .mode = .d9, .bit = opcode & 0x7 },
-        },
-    };
+    return isa.TABLE[opcode];
 }
 
 fn cycles(dec: DecodeResult) u8 {
-    return switch (dec.inst) {
-        .nop => 1,
-        .br => 2,
-        .ld, .ld_ri => 1,
-        .call_a12 => 2,
-        .callr => 4,
-        .brf => 4,
-        .st, .st_ri => 1,
-        .callf => 2,
-        .jmpf => 2,
-        .mov => 2,
-        .mov_ri => 1,
-        .jmp_a12 => 2,
-        .mul => 7,
-        .be_imm, .be_d9, .be_ri => 2,
-        .div => 7,
-        .bne_imm, .bne_d9, .bne_ri => 2,
-        .bpc => 2,
-        .dbnz_d9, .dbnz_ri => 2,
-        .push => 2,
-        .inc_d9, .inc_ri => 1,
-        .bp => 2,
-        .pop => 2,
-        .dec_d9, .dec_ri => 1,
-        .bz => 2,
-        .add_imm, .add_d9, .add_ri => 1,
-        .bn => 2,
-        .bnz => 2,
-        .addc_imm, .addc_d9, .addc_ri => 1,
-        .ret => 2,
-        .sub_imm, .sub_d9, .sub_ri => 1,
-        .not1 => 1,
-        .reti => 2,
-        .subc_imm, .subc_d9, .subc_ri => 1,
-        .ror => 1,
-        .ldc => 2,
-        .ldf => 2,
-        .stf => 2,
-        .xch_d9, .xch_ri => 1,
-        .clr1 => 1,
-        .rorc => 1,
-        .or_imm, .or_d9, .or_ri => 1,
-        .rol => 1,
-        .and_imm, .and_d9, .and_ri => 1,
-        .set1 => 1,
-        .rolc => 1,
-        .xor_imm, .xor_d9, .xor_ri => 1,
-    };
+    return dec.cycles;
 }
 
 pub fn step(cpu: *Cpu) u8 {
@@ -645,7 +401,7 @@ pub fn step(cpu: *Cpu) u8 {
     cpu.tickTimers(used);
     cpu.requestLevelDrivenInterrupts();
     cpu.servicePendingInterrupt();
-    if (cpu.checkBiosPhase()) |phase| {
+    if (dbg.checkBiosPhase(cpu)) |phase| {
         if (dbg.log_level == .trace) {
             std.debug.print("[BIOS] Phase: {s} (PC=0x{X:0>4})\n", .{ @tagName(phase), cpu.pc });
         }
@@ -691,7 +447,7 @@ fn readIndirectAddr(cpu: *Cpu, ri: u2) u9 {
 }
 
 fn decodeD9addr(dec: DecodeResult, cpu: *Cpu) u9 {
-    return @as(u9, @truncate(decodeD9(dec.opcode, cpu.fetch8())));
+    return @as(u9, @truncate(isa.decodeD9(dec.opcode, cpu.fetch8())));
 }
 
 fn readEA(cpu: *Cpu, dec: DecodeResult) u9 {
@@ -709,12 +465,4 @@ fn readOp8(cpu: *Cpu, dec: DecodeResult) u8 {
         .ri => cpu.load8(readIndirectAddr(cpu, @as(u2, @intCast(dec.ri.?)))),
         .impl => 0, // safety fallback
     };
-}
-
-pub fn decodeD9(opcode: u8, val: u8) u16 {
-    const d8: u16 = if (opcode & 0x08 != 0)
-        @as(u16, opcode >> 4) & 1
-    else
-        @as(u16, opcode) & 1;
-    return d8 << 8 | val;
 }

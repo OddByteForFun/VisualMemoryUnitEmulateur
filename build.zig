@@ -4,11 +4,25 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    const isa_mod = b.createModule(.{
+        .root_source_file = b.path("isa.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
     const lc86K_mod = b.createModule(.{
         .root_source_file = b.path("lc86K.zig"),
         .target = target,
         .optimize = optimize,
     });
+
+    const timer_mod = b.createModule(.{
+        .root_source_file = b.path("timer.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    timer_mod.addImport("lc86K", lc86K_mod);
+    lc86K_mod.addImport("timer", timer_mod);
 
     const decode_mod = b.createModule(.{
         .root_source_file = b.path("decode.zig"),
@@ -16,6 +30,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     decode_mod.addImport("lc86K", lc86K_mod);
+    decode_mod.addImport("isa", isa_mod);
 
     const debug_mod = b.createModule(.{
         .root_source_file = b.path("debug.zig"),
@@ -23,6 +38,14 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     debug_mod.addImport("lc86K", lc86K_mod);
+    debug_mod.addImport("isa", isa_mod);
+
+    const vmu_mod = b.createModule(.{
+        .root_source_file = b.path("vmu.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    vmu_mod.addImport("lc86K", lc86K_mod);
 
     decode_mod.addImport("debug", debug_mod);
 
@@ -34,6 +57,7 @@ pub fn build(b: *std.Build) void {
     main_mod.addImport("lc86K", lc86K_mod);
     main_mod.addImport("decode", decode_mod);
     main_mod.addImport("debug", debug_mod);
+    main_mod.addImport("vmu", vmu_mod);
 
     const raylib_dep = b.dependency("raylib_zig", .{
         .target = target,

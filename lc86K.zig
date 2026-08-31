@@ -239,192 +239,11 @@ pub const Cpu = struct {
         }
     }
 
+    /// Délègue le tick des timers au module timer.zig (testable sans hôte).
     /// ref : tableau 2.19 p 229
-    // timer 0 mode 0
-
-    fn t0IsMode0(self: *Cpu) bool {
-        const t0cnt = self.sfr_raw[SFR_T0CNT];
-        return (t0cnt & T0CNT_T0LONG == 0) and (t0cnt & T0CNT_T0LEXT == 0);
-    }
-
-    // Timer 0 mode 1
-
-    fn t0IsMode1(self: *Cpu) bool {
-        const t0cnt = self.sfr_raw[SFR_T0CNT];
-        return (t0cnt & T0CNT_T0LONG == 0) and (t0cnt & T0CNT_T0LEXT != 0);
-    }
-
-    // Timer 0 mode 2
-
-    fn t0IsMode2(self: *Cpu) bool {
-        const t0cnt = self.sfr_raw[SFR_T0CNT];
-        return (t0cnt & T0CNT_T0LONG != 0) and (t0cnt & T0CNT_T0LEXT == 0);
-    }
-
-    // timer 0 mode 3
-
-    fn t0IsMode3(self: *Cpu) bool {
-        const t0cnt = self.sfr_raw[SFR_T0CNT];
-        return (t0cnt & T0CNT_T0LONG != 0) and (t0cnt & T0CNT_T0LEXT != 0);
-    }
-
-    pub fn tickTimer0(self: *Cpu, cycles_used: u8) void {
-        const t0cnt = self.sfr_raw[SFR_T0CNT];
-        const mode = (t0cnt >> 4) & 0x03; //nibble haut avec bit 6 et 7
-        // commun à tous les modes
-
-        const prescaler_period: u16 = 256 - @as(u16, self.sfr_raw[SFR_T0PRR]);
-        self.t0_prescaler_acc += cycles_used;
-        while (self.t0_prescaler_acc >= prescaler_period) {
-            self.t0_prescaler_acc -= prescaler_period;
-            switch (mode) {
-                0 => self.incrementT0Mode0(),
-                1 => {},
-                2 => self.incrementT0Mode2(),
-                3 => {},
-                else => {},
-            }
-        }
-    }
-
-    fn incrementT0Mode2(self: *Cpu) void {
-        const old_l = self.t0l_counter;
-        self.t0l_counter +%= 1;
-
-        if (old_l == 0xFF) {
-            self.t0h_counter +%= 1;
-        }
-
-        if (old_l == 0xFF and self.t0h_counter == 0x00) {
-            self.sfr_raw[SFR_T0CNT] |= T0CNT_T0HOVF | T0CNT_T0LOVF;
-            self.t0l_counter = self.sfr_raw[SFR_T0LR];
-            self.t0h_counter = self.sfr_raw[SFR_T0HR];
-        }
-    }
-
-    fn incrementT0Mode0(self: *Cpu) void {
-        const t0cnt = self.sfr_raw[SFR_T0CNT];
-
-        if (t0cnt & T0CNT_T0LRUN != 0) {
-            const old = self.t0l_counter;
-            self.t0l_counter +%= 1;
-            if (old == 0xFF) {
-                self.t0l_counter = self.sfr_raw[SFR_T0LR];
-                self.sfr_raw[SFR_T0CNT] |= T0CNT_T0LOVF;
-            }
-        }
-
-        if (t0cnt & T0CNT_T0HRUN != 0) {
-            const old = self.t0h_counter;
-            self.t0h_counter +%= 1;
-            if (old == 0xFF) {
-                self.t0h_counter = self.sfr_raw[SFR_T0HR];
-                self.sfr_raw[SFR_T0CNT] |= T0CNT_T0HOVF;
-            }
-        }
-    }
-
-    // ── Timer 1 ──────────────────────────────────────────────
-    // Pas de prescaler : le timer tourne à la fréquence cycle clock (≈ 6 MHz)
-    // Mode 0 (T1LONG=0) : deux timers 8 bits indépendants (T1L, T1H)
-    // Mode 2 (T1LONG=1) : timer 16 bits reload (T1L overflow → T1H)
-    // Horloge T1L en mode 2 : Tcyc si T1HRUN=1, Tcyc/2 si T1HRUN=0
-
-    pub fn tickTimer1(self: *Cpu, cycles_used: u8) void {
-        const t1cnt = self.sfr_raw[SFR_T1CNT];
-        var i: u8 = 0;
-        while (i < cycles_used) : (i += 1) {
-            if (t1cnt & T1CNT_T1LONG != 0) {
-                self.incrementT1Mode2();
-            } else {
-                self.incrementT1Mode0();
-            }
-        }
-    }
-
-    fn incrementT1Mode0(self: *Cpu) void {
-        const t1cnt = self.sfr_raw[SFR_T1CNT];
-
-        if (t1cnt & T1CNT_T1LRUN != 0) {
-            const old = self.t1l_counter;
-            self.t1l_counter +%= 1;
-            if (old == 0xFF) {
-                self.t1l_counter = self.sfr_raw[SFR_T1L]; // reload depuis T1LR (même adresse)
-                self.sfr_raw[SFR_T1CNT] |= T1CNT_T1LOVF;
-            }
-        }
-
-        if (t1cnt & T1CNT_T1HRUN != 0) {
-            const old = self.t1h_counter;
-            self.t1h_counter +%= 1;
-            if (old == 0xFF) {
-                self.t1h_counter = self.sfr_raw[SFR_T1H]; // reload depuis T1HR (même adresse)
-                self.sfr_raw[SFR_T1CNT] |= T1CNT_T1HOVF;
-            }
-        }
-    }
-
-    fn incrementT1Mode2(self: *Cpu) void {
-        var t1cnt = self.sfr_raw[SFR_T1CNT];
-
-        // Mode 2 : timer 16 bits cascade
-        // T1L incrémente chaque cycle si T1LRUN=1
-        if (t1cnt & T1CNT_T1LRUN != 0) {
-            const old_l = self.t1l_counter;
-            self.t1l_counter +%= 1;
-
-            if (old_l == 0xFF) {
-                self.t1l_counter = self.sfr_raw[SFR_T1L]; // reload T1LR
-                t1cnt |= T1CNT_T1LOVF;
-
-                // T1L overflow → incrémente T1H si T1HRUN=1
-                if (t1cnt & T1CNT_T1HRUN != 0) {
-                    const old_h = self.t1h_counter;
-                    self.t1h_counter +%= 1;
-                    if (old_h == 0xFF) {
-                        self.t1h_counter = self.sfr_raw[SFR_T1H]; // reload T1HR
-                        t1cnt |= T1CNT_T1HOVF;
-                    }
-                }
-            }
-        }
-
-        self.sfr_raw[SFR_T1CNT] = t1cnt;
-    }
-
-    pub fn tickBaseTimer(self: *Cpu, cycles_used: u8) void {
-        const btcr = self.sfr_raw[SFR_BTCR];
-
-        // BTCR6 (bit 6) = 0 → base timer arrêté, counter clear
-        if (btcr & BTCR_BT_RUN == 0) return;
-
-        self.base_timer_acc += cycles_used;
-        while (self.base_timer_acc >= CYCLES_PER_FBST_TICK) {
-            self.base_timer_acc -= CYCLES_PER_FBST_TICK;
-            const old_counter = self.base_timer_counter;
-            self.base_timer_counter = (self.base_timer_counter + 1) & 0x3FFF; // 14-bit
-            const new_counter = self.base_timer_counter;
-
-            // BT0 : configurable rate based on BTCR7
-            // BTCR7=0: interrupt every 16384 ticks
-            // BTCR7=1: interrupt every 64 ticks
-            const int0_rate: u16 = if (btcr & BTCR_BT0_CYCLE != 0) 0x0040 else 0x4000;
-            if (old_counter / int0_rate < new_counter / int0_rate or new_counter == 0) {
-                self.sfr_raw[SFR_BTCR] |= BTCR_BT0_FLAG;
-            }
-
-            // BT1 : seuil configurable selon BTCR5:BTCR4
-            const bt1_idx: u2 = @truncate((btcr & (BTCR_BT1_CYCLE_HI | BTCR_BT1_CYCLE_LO)) >> 4);
-            if (new_counter == BT1_THRESHOLDS[bt1_idx]) {
-                self.sfr_raw[SFR_BTCR] |= BTCR_BT1_FLAG;
-            }
-        }
-    }
-
     pub fn tickTimers(self: *Cpu, cycles_used: u8) void {
-        self.tickTimer0(cycles_used);
-        self.tickTimer1(cycles_used);
-        self.tickBaseTimer(cycles_used);
+        const timer = @import("timer");
+        timer.tick(self, cycles_used);
     }
 
     // gestion des interuptions.
@@ -544,144 +363,106 @@ pub const Cpu = struct {
         };
     }
 
-    pub fn checkBiosPhase(self: *Cpu) ?BiosPhase {
-        if (self.inst_bank.bank_id != .rom) {
-            if (self.bios_phase != .game_running) {
-                self.bios_phase = .game_running;
-                return .game_running;
-            }
-            return null;
-        }
-        const new_phase: ?BiosPhase = switch (self.pc) {
-            0x0200 => .bios_init,
-            0x024C => .bios_clear_ram,
-            0x0294 => .bios_post_init,
-            0x02AF => .bios_date_wait,
-            0x02C2 => .bios_lcd_setup,
-            0x02EF => .bios_date_ok,
-            0x0317 => .bios_main_loop,
-            0x033A => .bios_mode_0,
-            0x0360 => .bios_mode_1,
-            0x0387 => .bios_mode_2,
-            0x03AE => .bios_game_launch,
-            0x03E1 => .bios_no_game,
-            else => null,
-        };
-        if (new_phase) |phase| {
-            if (self.bios_phase != phase) {
-                std.debug.print("PHASE CHANGE: {} -> {} PC={X:0>4} xram_wr={d} vtrbf_wr={d}\n", .{
-                    self.bios_phase, phase, self.pc, self.xram_write_count, self.vtrbf_write_count,
-                });
-                self.bios_phase = phase;
-                const idx = @intFromEnum(phase);
-                const seen = &self.bios_phase_seen;
-                if (idx < seen.len and !seen[idx]) {
-                    seen[idx] = true;
-                    return phase;
-                }
-            }
-        }
-        return null;
-    }
-
     // il s'agit de définir les offsets utilisés par load8 qui ajoute 0x100 à ces valeurs.
 
-    const SFR_ACC: u7 = 0x00;
-    const SFR_PSW: u7 = 0x01;
-    const SFR_B: u7 = 0x02;
-    const SFR_C: u7 = 0x03;
-    const SFR_TRL: u7 = 0x04;
-    const SFR_TRH: u7 = 0x05;
-    const SFR_SP: u7 = 0x06;
-    const SFR_IE: u7 = 0x08; // autorisation d'interruption
-    const SFR_IP: u7 = 0x09;
+    pub const SFR_ACC: u7 = 0x00;
+    pub const SFR_PSW: u7 = 0x01;
+    pub const SFR_B: u7 = 0x02;
+    pub const SFR_C: u7 = 0x03;
+    pub const SFR_TRL: u7 = 0x04;
+    pub const SFR_TRH: u7 = 0x05;
+    pub const SFR_SP: u7 = 0x06;
+    pub const SFR_PCON: u7 = 0x07; // Power control (bit 0 = HALT mode)
+    pub const SFR_IE: u7 = 0x08; // autorisation d'interruption
+    pub const SFR_IP: u7 = 0x09;
+    pub const SFR_OCR: u7 = 0x0E; // Oscillator control register
 
-    // Timer 0 mode 2
-    const SFR_T0PRR: u7 = 0x11; //  valeur du prescaler Timer 0
-    const SFR_T0L: u7 = 0x12; // Lecture du compteur courant
-    const SFR_T0LR: u7 = 0x13; // Lecture écriture du reload
-    const SFR_T0H: u7 = 0x14; // compteur high courant
-    const SFR_T0HR: u7 = 0x15; //  reload high
-    const SFR_T0CNT: u7 = 0x10; //  contrôle, flags et enables (adresse hardware 0x110)
-    const SFR_PCON: u7 = 0x07; // Power control (bit 0 = HALT mode)
-    const SFR_VSEL: u7 = 0x63; // Control register (INCE=bit4, ASEL=bit0)
-    const SFR_VRMAD1: u7 = 0x64; // Work RAM address low byte
-    const SFR_VRMAD2: u7 = 0x65; // Work RAM address high (VRMAD8=bit0 = bank)
-    const SFR_VTRBF: u7 = 0x66; // Work RAM data access (read/write via VRMAD)
-    const SFR_VLREG: u7 = 0x67; // Maple word count
-    const SFR_MPLSW: u7 = 0x60; // Maple status word
-    const SFR_MPLSTA: u7 = 0x61; // Maple start/status (bit0=TXDONE, bit1=IRQREQ, bit6=UNK)
-    const SFR_MPLRST: u7 = 0x62; // Maple reset
-    const SFR_XBNK: u7 = 0x25; // Sélection banque XRAM (LCD)
-    const SFR_P1: u7 = 0x44; // Port 1 (série + PWM audio)
-    const SFR_P1DDR: u7 = 0x45; // Port 1 data direction
-    const SFR_P1FCR: u7 = 0x46; // Port 1 function control
-    const SFR_P3: u7 = 0x4C; // Port 3 (boutons, input-only)
-    const SFR_P3DDR: u7 = 0x4D; // Port 3 data direction (ne pas modifier)
-    const SFR_P3INT: u7 = 0x4E; // Port 3 interrupt control
-    const SFR_P7: u7 = 0x5C; // Port 7 (détection tension, read-only)
-    const SFR_I23CR: u7 = 0x5E; // sélection front externe INT2/INT3
-    const SFR_ISL: u7 = 0x5F; //  sélection entrée externe et horloge
-    const SFR_VCCR: u7 = 0x27; // LCD contrast/power control
+    // Timer 0 — SFR offsets
+    pub const SFR_T0CNT: u7 = 0x10; //  contrôle, flags et enables (adresse hardware 0x110)
+    pub const SFR_T0PRR: u7 = 0x11; //  valeur du prescaler Timer 0
+    pub const SFR_T0L: u7 = 0x12; // Lecture du compteur courant
+    pub const SFR_T0LR: u7 = 0x13; // Lecture écriture du reload
+    pub const SFR_T0H: u7 = 0x14; // compteur high courant
+    pub const SFR_T0HR: u7 = 0x15; //  reload high
+    pub const SFR_VSEL: u7 = 0x63; // Control register (INCE=bit4, ASEL=bit0)
+    pub const SFR_VRMAD1: u7 = 0x64; // Work RAM address low byte
+    pub const SFR_VRMAD2: u7 = 0x65; // Work RAM address high (VRMAD8=bit0 = bank)
+    pub const SFR_VTRBF: u7 = 0x66; // Work RAM data access (read/write via VRMAD)
+    pub const SFR_VLREG: u7 = 0x67; // Maple word count
+    pub const SFR_MPLSW: u7 = 0x60; // Maple status word
+    pub const SFR_MPLSTA: u7 = 0x61; // Maple start/status (bit0=TXDONE, bit1=IRQREQ, bit6=UNK)
+    pub const SFR_MPLRST: u7 = 0x62; // Maple reset
+    pub const SFR_XBNK: u7 = 0x25; // Sélection banque XRAM (LCD)
+    pub const SFR_P1: u7 = 0x44; // Port 1 (série + PWM audio)
+    pub const SFR_P1DDR: u7 = 0x45; // Port 1 data direction
+    pub const SFR_P1FCR: u7 = 0x46; // Port 1 function control
+    pub const SFR_P3: u7 = 0x4C; // Port 3 (boutons, input-only)
+    pub const SFR_P3DDR: u7 = 0x4D; // Port 3 data direction (ne pas modifier)
+    pub const SFR_P3INT: u7 = 0x4E; // Port 3 interrupt control
+    pub const SFR_P7: u7 = 0x5C; // Port 7 (détection tension, read-only)
+    pub const SFR_I23CR: u7 = 0x5E; // sélection front externe INT2/INT3
+    pub const SFR_ISL: u7 = 0x5F; //  sélection entrée externe et horloge
+    pub const SFR_MCR: u7 = 0x20; // LCD Mode Control
+    pub const SFR_VCCR: u7 = 0x27; // LCD contrast/power control
 
-    // Octet qui compose T0CNT
-    const T0CNT_T0HRUN: u8 = 0x80;
-    const T0CNT_T0LRUN: u8 = 0x40;
-    const T0CNT_T0LONG: u8 = 0x20;
-    const T0CNT_T0LEXT: u8 = 0x10;
-    const T0CNT_T0HOVF: u8 = 0x08; // utilisé pour les interruptions mode 0
-    const T0CNT_T0HIE: u8 = 0x04; // T0H interrupt request enabled
-    const T0CNT_T0LOVF: u8 = 0x02; // utilisé pour les interruptions mode 0
-    const T0CNT_T0LIE: u8 = 0x01; // T0L interrupt request enabled
+    // T0CNT bits
+    pub const T0CNT_T0HRUN: u8 = 0x80;
+    pub const T0CNT_T0LRUN: u8 = 0x40;
+    pub const T0CNT_T0LONG: u8 = 0x20;
+    pub const T0CNT_T0LEXT: u8 = 0x10;
+    pub const T0CNT_T0HOVF: u8 = 0x08; // utilisé pour les interruptions mode 0
+    pub const T0CNT_T0HIE: u8 = 0x04; // T0H interrupt request enabled
+    pub const T0CNT_T0LOVF: u8 = 0x02; // utilisé pour les interruptions mode 0
+    pub const T0CNT_T0LIE: u8 = 0x01; // T0L interrupt request enabled
 
     // Timer 1 — SFR offsets (0x118-0x11D → offset - 0x100)
-    const SFR_T1CNT: u7 = 0x18; // control, flags, enables
-    const SFR_T1LC: u7 = 0x1A; // low comparator data
-    const SFR_T1L: u7 = 0x1B; // low counter (read) / T1LR reload (write)
-    const SFR_T1HC: u7 = 0x1C; // high comparator data
-    const SFR_T1H: u7 = 0x1D; // high counter (read) / T1HR reload (write)
+    pub const SFR_T1CNT: u7 = 0x18; // control, flags, enables
+    pub const SFR_T1LC: u7 = 0x1A; // low comparator data
+    pub const SFR_T1L: u7 = 0x1B; // low counter (read) / T1LR reload (write)
+    pub const SFR_T1HC: u7 = 0x1C; // high comparator data
+    pub const SFR_T1H: u7 = 0x1D; // high counter (read) / T1HR reload (write)
 
     // P3INT bits
-    const P3INT_P30INT: u8 = 0x01; // bit 0: interrupt request enable
-    const P3INT_P31INT: u8 = 0x02; // bit 1: interrupt source flag (set when LOW detected)
-    const P3INT_P32INT: u8 = 0x04; // bit 2: interrupt generation enable
+    pub const P3INT_P30INT: u8 = 0x01; // bit 0: interrupt request enable
+    pub const P3INT_P31INT: u8 = 0x02; // bit 1: interrupt source flag (set when LOW detected)
+    pub const P3INT_P32INT: u8 = 0x04; // bit 2: interrupt generation enable
 
     // T1CNT bits
-    const T1CNT_T1HRUN: u8 = 0x80; // T1H count control
-    const T1CNT_T1LRUN: u8 = 0x40; // T1L count control
-    const T1CNT_T1LONG: u8 = 0x20; // 0=mode 0/1 (8-bit), 1=mode 2/3 (16-bit)
-    const T1CNT_T1HOVF: u8 = 0x08; // T1H overflow flag
-    const T1CNT_T1HIE: u8 = 0x04; // T1H interrupt request enable
-    const T1CNT_T1LOVF: u8 = 0x02; // T1L overflow flag
-    const T1CNT_T1LIE: u8 = 0x01; // T1L interrupt request enable
+    pub const T1CNT_T1HRUN: u8 = 0x80; // T1H count control
+    pub const T1CNT_T1LRUN: u8 = 0x40; // T1L count control
+    pub const T1CNT_T1LONG: u8 = 0x20; // 0=mode 0/1 (8-bit), 1=mode 2/3 (16-bit)
+    pub const T1CNT_T1HOVF: u8 = 0x08; // T1H overflow flag
+    pub const T1CNT_T1HIE: u8 = 0x04; // T1H interrupt request enable
+    pub const T1CNT_T1LOVF: u8 = 0x02; // T1L overflow flag
+    pub const T1CNT_T1LIE: u8 = 0x01; // T1L interrupt request enable
 
     // Base Timer
-    const SFR_BTCR: u7 = 0x7F; // gestion notamment des interruptions du base timer
-    const BTCR_BT0_IE: u8 = 0x01; // bit 0: BT0 request enable
-    const BTCR_BT0_FLAG: u8 = 0x02; // bit 1: BT0 source flag
-    const BTCR_BT1_IE: u8 = 0x04; // bit 2: BT1 request enable
-    const BTCR_BT1_FLAG: u8 = 0x08; // bit 3: BT1 source flag
-    const BTCR_BT1_CYCLE_LO: u8 = 0x10; // bit 4: BT1 cycle control low
-    const BTCR_BT1_CYCLE_HI: u8 = 0x20; // bit 5: BT1 cycle control high
-    const BTCR_BT_RUN: u8 = 0x40; // bit 6: base timer start/stop
-    const BTCR_BT0_CYCLE: u8 = 0x80; // bit 7: BT0 cycle control (0: 16384/fBST, 1: 64/fBST fast-forward)
+    pub const SFR_BTCR: u7 = 0x7F; // gestion notamment des interruptions du base timer
+    pub const BTCR_BT0_IE: u8 = 0x01; // bit 0: BT0 request enable
+    pub const BTCR_BT0_FLAG: u8 = 0x02; // bit 1: BT0 source flag
+    pub const BTCR_BT1_IE: u8 = 0x04; // bit 2: BT1 request enable
+    pub const BTCR_BT1_FLAG: u8 = 0x08; // bit 3: BT1 source flag
+    pub const BTCR_BT1_CYCLE_LO: u8 = 0x10; // bit 4: BT1 cycle control low
+    pub const BTCR_BT1_CYCLE_HI: u8 = 0x20; // bit 5: BT1 cycle control high
+    pub const BTCR_BT_RUN: u8 = 0x40; // bit 6: base timer start/stop
+    pub const BTCR_BT0_CYCLE: u8 = 0x80; // bit 7: BT0 cycle control (0: 16384/fBST, 1: 64/fBST fast-forward)
 
     // fBST = 32768 Hz quartz. CPU ≈ 6 MHz. 1 tick fBST ≈ 183 cycles CPU.
-    const CPU_FREQ: u32 = 6_000_000;
-    const FST_FREQ: u32 = 32_768;
-    const CYCLES_PER_FBST_TICK: u32 = CPU_FREQ / FST_FREQ; // 183
-    const BT1_THRESHOLDS: [4]u16 = .{ 32, 128, 512, 2048 }; // cycles fBST selon BTCR5:BTCR4
+    pub const CPU_FREQ: u32 = 6_000_000;
+    pub const FST_FREQ: u32 = 32_768;
+    pub const CYCLES_PER_FBST_TICK: u32 = CPU_FREQ / FST_FREQ; // 183
+    pub const BT1_THRESHOLDS: [4]u16 = .{ 32, 128, 512, 2048 }; // cycles fBST selon BTCR5:BTCR4
 
     // Priorisation des interruptions (bits du registre IE)
-    const IP_int2: u8 = 0x04; // IE bit 2 = ET2 (INT2_T0L)
-    const IP_int3: u8 = 0x08; // IE bit 3 = ET3 (INT3_BT)
-    const IP_t0h: u8 = 0x10; // IE bit 4 = ET0H (T0H)
-    const IP_T1: u8 = 0x20; // IE bit 5 = ET1 (Timer 1)
-    const IP_SIO0: u8 = 0x40; // IE bit 6
-    const IP_SIO1: u8 = 0x80; // IE bit 7
+    pub const IP_int2: u8 = 0x04; // IE bit 2 = ET2 (INT2_T0L)
+    pub const IP_int3: u8 = 0x08; // IE bit 3 = ET3 (INT3_BT)
+    pub const IP_t0h: u8 = 0x10; // IE bit 4 = ET0H (T0H)
+    pub const IP_T1: u8 = 0x20; // IE bit 5 = ET1 (Timer 1)
+    pub const IP_SIO0: u8 = 0x40; // IE bit 6
+    pub const IP_SIO1: u8 = 0x80; // IE bit 7
 
-    const SFR_EXT: u7 = 0x0D;
-    const SFR_FPR: u7 = 0x54; // Flash Protection Register (bit0=FlashAddressBank, bit1=FlashWriteUnlock)
+    pub const SFR_EXT: u7 = 0x0D;
+    pub const SFR_FPR: u7 = 0x54; // Flash Protection Register (bit0=FlashAddressBank, bit1=FlashWriteUnlock)
 
     pub fn loadSFR(self: *Cpu, offset: u7) u8 {
         return switch (offset) {
@@ -757,8 +538,8 @@ pub const Cpu = struct {
                     self.t0h_counter = self.sfr_raw[SFR_T0HR];
                 }
             },
-            0x20 => {}, // MCR (LCD Mode Control)
-            0x27 => {}, // VCCR (LCD contrast/power)
+            SFR_MCR => {}, // MCR (LCD Mode Control)
+            SFR_VCCR => {}, // VCCR (LCD contrast/power)
             0x22 => {}, // STAD (Display start address)
             SFR_VSEL => { // VSEL: bits read/write (reset defaults: 0xFC)
                 self.sfr_raw[SFR_VSEL] = val;
@@ -896,5 +677,3 @@ pub const Cpu = struct {
         self.store8(addr + 1, @truncate(val >> 8));
     }
 };
-
-pub fn main() void {}

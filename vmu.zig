@@ -98,8 +98,8 @@ pub fn installGame(cpu: *Cpu, game_size: usize) void {
     const size_blocks: u16 = @intCast((game_size + 511) / 512);
     flash[dir_base + 0x18] = @truncate(size_blocks);
     flash[dir_base + 0x19] = @truncate(size_blocks >> 8);
-    // VmsHeaderBlockOffset at 0x1A (header is at block 0)
-    flash[dir_base + 0x1A] = 0x00;
+    // VmsHeaderBlockOffset at 0x1A (header is at block 1)
+    flash[dir_base + 0x1A] = 0x01;
     flash[dir_base + 0x1B] = 0x00;
 
     // Set up FAT chain for game blocks (block 0 → 1 → 2 → ... → FAT_LastInFile)
@@ -123,7 +123,7 @@ pub fn installGame(cpu: *Cpu, game_size: usize) void {
 /// Initialize BIOS date and SFRs to match libevmu's EvmuRam_IBehavior_reset_().
 /// Sets PC to 0x2E1 to skip the Dreamcast serial date query (we don't emulate the serial link).
 /// Writes date to RAM and configures SFRs the BIOS expects at startup.
-pub fn initBiosRtc(cpu: *Cpu) void {
+pub fn initBiosRtc(cpu: *Cpu, bios_menu_mode: bool) void {
     // Jump past the BIOS serial date-query code (no Dreamcast serial emulation)
     cpu.pc = 0x2E1;
     // Write current date to RAM bank 0 (BCD format + binary)
@@ -158,7 +158,7 @@ pub fn initBiosRtc(cpu: *Cpu) void {
     cpu.sfr_raw[Cpu.SFR_P1FCR] = 0xBF; // P1FCR: port 1 function control
     cpu.sfr_raw[Cpu.SFR_P3DDR] = 0x00; // P3DDR: all input
     cpu.sfr_raw[Cpu.SFR_P3INT] = 0xFD; // P3INT: P30INT=1 (enable), P31INT=0, P32INT=1 (continuous)
-    cpu.sfr_raw[Cpu.SFR_P7] = 0x02; // P7: P71 mask
+    cpu.sfr_raw[Cpu.SFR_P7] = if (bios_menu_mode) 0x02 else 0x00; // P7: bit1=0 => standalone/auto-launch, bit1=1 => menu/normal BIOS path
     cpu.sfr_raw[Cpu.SFR_ISL] = 0xC0; // ISL: base timer clock = quartz oscillator
     cpu.sfr_raw[Cpu.SFR_VSEL] = 0xFC; // VSEL: default value
     cpu.sfr_raw[Cpu.SFR_BTCR] = 0x41; // BTCR: BT_INT0_SRC=quartz, BT_INT0_IE=1

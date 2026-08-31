@@ -1,5 +1,6 @@
 const std = @import("std");
 const Cpu = @import("lc86K").Cpu;
+const isa = @import("isa");
 
 pub const LogLevel = enum(u8) {
     none = 0,
@@ -103,368 +104,54 @@ pub fn getRingLine(idx: usize) ?[]const u8 {
     return log_ring[actual][0..len];
 }
 
-fn decodeD9Addr(opcode: u8, val: u8) u16 {
-    const d8: u16 = if (opcode & 0x08 != 0)
-        @as(u16, opcode >> 4) & 1
-    else
-        @as(u16, opcode) & 1;
-    return d8 << 8 | val;
-}
+// decodeD9Addr supprimé — utiliser isa.decodeD9(opcode, val) directement
 
 pub fn disassembleAt(cpu: *Cpu, buf: []u8, pc: u16) usize {
     const rom = cpu.inst_bank.data;
     if (pc >= rom.len) return 0;
 
     const start_pc = pc;
-    var p: usize = pc;
-    const opcode = rom[p];
-    p += 1;
+    const opcode = rom[pc];
+    const e = isa.TABLE[opcode];
 
-    const row: u4 = @truncate(opcode >> 4);
-    const col: u4 = @truncate(opcode);
+    // Octets opérande lus depuis la table ISA (taille unique de source de vérité)
+    const operands = rom[pc + 1 .. @min(pc + e.size, rom.len)];
 
-    switch (row) {
-        0x0 => switch (col) {
-            0x0 => return fmtI(buf, start_pc, "NOP"),
-            0x1 => {
-                const r8 = rom[p];
-                const tgt: u16 = start_pc + 2 +% @as(u16, @bitCast(@as(i16, @as(i8, @bitCast(r8)))));
-                return fmtA(buf, start_pc, "BR", tgt);
-            },
-            0x2, 0x3 => {
-                const d8 = rom[p];
-                return fmtA(buf, start_pc, "LD", decodeD9Addr(opcode, d8));
-            },
-            0x4...0x7 => {
-                const ri: u2 = @intCast(col & 0x3);
-                return fmtR(buf, start_pc, "LD", ri);
-            },
-            0x8...0xF => {
-                const imm8 = rom[p];
-                const ad12 = ((@as(u16, opcode & 0x10) << 7) |
-                    (@as(u16, opcode & 0x07) << 8) |
-                    @as(u16, imm8));
-                const target = (start_pc & 0xF000) | ad12;
-                return fmtA(buf, start_pc, "CALL", target);
-            },
+    return switch (e.disp) {
+        .fmtI => fmtI(buf, start_pc, e.mnemonic),
+        .fmtI2 => fmtI2(buf, start_pc, e.mnemonic, read16(operands, 0)),
+        .fmtImm => fmtImm(buf, start_pc, e.mnemonic, operands[0]),
+        .fmtBI => fmtImm(buf, start_pc, e.mnemonic, operands[0]),
+        .fmtA_d9 => fmtA(buf, start_pc, e.mnemonic, isa.decodeD9(opcode, operands[0])),
+        .fmtA_br => {
+            const r8 = operands[0];
+            const tgt: u16 = start_pc + 2 +% @as(u16, @bitCast(@as(i16, @as(i8, @bitCast(r8)))));
+            return fmtA(buf, start_pc, e.mnemonic, tgt);
         },
-        0x1 => switch (col) {
-            0x0 => {
-                const lo = rom[p];
-                const hi = rom[p + 1];
-                const offset = (@as(u16, hi) << 8) | @as(u16, lo);
-                const tgt: u16 = start_pc +% 3 +% @as(u16, @bitCast(@as(i16, @bitCast(offset))));
-                return fmtA(buf, start_pc, "CALLR", tgt);
-            },
-            0x1 => {
-                const r8 = rom[p];
-                return fmtI2(buf, start_pc, "BRF", r8);
-            },
-            0x2, 0x3 => {
-                const d8 = rom[p];
-                return fmtA(buf, start_pc, "ST", decodeD9Addr(opcode, d8));
-            },
-            0x4...0x7 => {
-                const ri: u2 = @intCast(col & 0x3);
-                return fmtR(buf, start_pc, "ST", ri);
-            },
-            0x8...0xF => {
-                const imm8 = rom[p];
-                const ad12 = ((@as(u16, opcode & 0x10) << 7) |
-                    (@as(u16, opcode & 0x07) << 8) |
-                    @as(u16, imm8));
-                const target = (start_pc & 0xF000) | ad12;
-                return fmtA(buf, start_pc, "CALL", target);
-            },
+        .fmtA_callr => {
+            const offset = read16(operands, 0);
+            const tgt: u16 = start_pc +% 3 +% @as(u16, @bitCast(@as(i16, @bitCast(offset))));
+            return fmtA(buf, start_pc, e.mnemonic, tgt);
         },
-        0x2 => switch (col) {
-            0x0 => {
-                const hi = rom[p];
-                const lo = rom[p + 1];
-                return fmtA(buf, start_pc, "CALLF", (@as(u16, hi) << 8) | @as(u16, lo));
-            },
-            0x1 => {
-                const hi = rom[p];
-                const lo = rom[p + 1];
-                return fmtA(buf, start_pc, "JMPF", (@as(u16, hi) << 8) | @as(u16, lo));
-            },
-            0x2, 0x3 => {
-                const d8 = rom[p];
-                const imm = rom[p + 1];
-                return fmtM(buf, start_pc, "MOV", decodeD9Addr(opcode, d8), imm);
-            },
-            0x4...0x7 => {
-                const ri: u2 = @intCast(col & 0x3);
-                const imm = rom[p];
-                return fmtMR(buf, start_pc, "MOV", ri, imm);
-            },
-            0x8...0xF => {
-                const imm8 = rom[p];
-                const ad12 = ((@as(u16, opcode & 0x10) << 7) |
-                    (@as(u16, opcode & 0x07) << 8) |
-                    @as(u16, imm8));
-                return fmtA(buf, start_pc, "JMP", (start_pc & 0xF000) | ad12);
-            },
+        .fmtA_jmp => {
+            const imm8 = operands[0];
+            const ad12 = ((@as(u16, opcode & 0x10) << 7) |
+                (@as(u16, opcode & 0x07) << 8) |
+                @as(u16, imm8));
+            return fmtA(buf, start_pc, e.mnemonic, (start_pc & 0xF000) | ad12);
         },
-        0x3 => switch (col) {
-            0x0 => return fmtI(buf, start_pc, "MUL"),
-            0x1 => {
-                const imm = rom[p];
-                return fmtBI(buf, start_pc, "BE", imm);
-            },
-            0x2, 0x3 => {
-                const d8 = rom[p];
-                const r8 = rom[p + 1];
-                _ = r8;
-                return fmtA(buf, start_pc, "BE", decodeD9Addr(opcode, d8));
-            },
-            0x4...0x7 => {
-                const ri: u2 = @intCast(col & 0x3);
-                return fmtR(buf, start_pc, "BE", ri);
-            },
-            0x8...0xF => {
-                const imm8 = rom[p];
-                const ad12 = ((@as(u16, opcode & 0x10) << 7) |
-                    (@as(u16, opcode & 0x07) << 8) |
-                    @as(u16, imm8));
-                return fmtA(buf, start_pc, "JMP", (start_pc & 0xF000) | ad12);
-            },
-        },
-        0x4 => switch (col) {
-            0x0 => return fmtI(buf, start_pc, "DIV"),
-            0x1 => {
-                const imm = rom[p];
-                return fmtBI(buf, start_pc, "BNE", imm);
-            },
-            0x2, 0x3 => {
-                const d8 = rom[p];
-                _ = rom[p + 1];
-                return fmtA(buf, start_pc, "BNE", decodeD9Addr(opcode, d8));
-            },
-            0x4...0x7 => {
-                const ri: u2 = @intCast(col & 0x3);
-                return fmtR(buf, start_pc, "BNE", ri);
-            },
-            0x8...0xF => {
-                const d8 = rom[p];
-                const bit: u3 = @intCast(opcode & 0x07);
-                return fmtBPC(buf, start_pc, "BPC", decodeD9Addr(opcode, d8), bit);
-            },
-        },
-        0x5 => switch (col) {
-            0x0, 0x1 => return fmtI(buf, start_pc, "NOP"),
-            0x2, 0x3 => {
-                const d8 = rom[p];
-                _ = rom[p + 1];
-                return fmtA(buf, start_pc, "DBNZ", decodeD9Addr(opcode, d8));
-            },
-            0x4...0x7 => {
-                const ri: u2 = @intCast(col & 0x3);
-                return fmtR(buf, start_pc, "DBNZ", ri);
-            },
-            0x8...0xF => {
-                const d8 = rom[p];
-                const bit: u3 = @intCast(opcode & 0x07);
-                return fmtBPC(buf, start_pc, "BPC", decodeD9Addr(opcode, d8), bit);
-            },
-        },
-        0x6 => switch (col) {
-            0x0, 0x1 => {
-                const d8 = rom[p];
-                return fmtA(buf, start_pc, "PUSH", decodeD9Addr(opcode, d8));
-            },
-            0x2, 0x3 => {
-                const d8 = rom[p];
-                return fmtA(buf, start_pc, "INC", decodeD9Addr(opcode, d8));
-            },
-            0x4...0x7 => {
-                const ri: u2 = @intCast(col & 0x3);
-                return fmtR(buf, start_pc, "INC", ri);
-            },
-            0x8...0xF => {
-                const d8 = rom[p];
-                const bit: u3 = @intCast(opcode & 0x07);
-                return fmtBitBranch(buf, start_pc, "BP", decodeD9Addr(opcode, d8), bit);
-            },
-        },
-        0x7 => switch (col) {
-            0x0, 0x1 => {
-                const d8 = rom[p];
-                return fmtA(buf, start_pc, "POP", decodeD9Addr(opcode, d8));
-            },
-            0x2, 0x3 => {
-                const d8 = rom[p];
-                return fmtA(buf, start_pc, "DEC", decodeD9Addr(opcode, d8));
-            },
-            0x4...0x7 => {
-                const ri: u2 = @intCast(col & 0x3);
-                return fmtR(buf, start_pc, "DEC", ri);
-            },
-            0x8...0xF => {
-                const d8 = rom[p];
-                const bit: u3 = @intCast(opcode & 0x07);
-                return fmtBitBranch(buf, start_pc, "BP", decodeD9Addr(opcode, d8), bit);
-            },
-        },
-        0x8 => switch (col) {
-            0x0 => {
-                return fmtI(buf, start_pc, "BZ");
-            },
-            0x1 => {
-                const imm = rom[p];
-                return fmtImm(buf, start_pc, "ADD", imm);
-            },
-            0x2, 0x3 => {
-                const d8 = rom[p];
-                return fmtA(buf, start_pc, "ADD", decodeD9Addr(opcode, d8));
-            },
-            0x4...0x7 => {
-                const ri: u2 = @intCast(col & 0x3);
-                return fmtR(buf, start_pc, "ADD", ri);
-            },
-            0x8...0xF => {
-                const d8 = rom[p];
-                const bit: u3 = @intCast(opcode & 0x07);
-                return fmtBitBranch(buf, start_pc, "BN", decodeD9Addr(opcode, d8), bit);
-            },
-        },
-        0x9 => switch (col) {
-            0x0 => return fmtI(buf, start_pc, "BNZ"),
-            0x1 => {
-                const imm = rom[p];
-                return fmtImm(buf, start_pc, "ADDC", imm);
-            },
-            0x2, 0x3 => {
-                const d8 = rom[p];
-                return fmtA(buf, start_pc, "ADDC", decodeD9Addr(opcode, d8));
-            },
-            0x4...0x7 => {
-                const ri: u2 = @intCast(col & 0x3);
-                return fmtR(buf, start_pc, "ADDC", ri);
-            },
-            0x8...0xF => {
-                const d8 = rom[p];
-                const bit: u3 = @intCast(opcode & 0x07);
-                return fmtBitBranch(buf, start_pc, "BN", decodeD9Addr(opcode, d8), bit);
-            },
-        },
-        0xA => switch (col) {
-            0x0 => return fmtI(buf, start_pc, "RET"),
-            0x1 => {
-                const imm = rom[p];
-                return fmtImm(buf, start_pc, "SUB", imm);
-            },
-            0x2, 0x3 => {
-                const d8 = rom[p];
-                return fmtA(buf, start_pc, "SUB", decodeD9Addr(opcode, d8));
-            },
-            0x4...0x7 => {
-                const ri: u2 = @intCast(col & 0x3);
-                return fmtR(buf, start_pc, "SUB", ri);
-            },
-            0x8...0xF => {
-                const d8 = rom[p];
-                const bit: u3 = @intCast(opcode & 0x07);
-                return fmtBitOp(buf, start_pc, "NOT1", decodeD9Addr(opcode, d8), bit);
-            },
-        },
-        0xB => switch (col) {
-            0x0 => return fmtI(buf, start_pc, "RETI"),
-            0x1 => {
-                const imm = rom[p];
-                return fmtImm(buf, start_pc, "SUBC", imm);
-            },
-            0x2, 0x3 => {
-                const d8 = rom[p];
-                return fmtA(buf, start_pc, "SUBC", decodeD9Addr(opcode, d8));
-            },
-            0x4...0x7 => {
-                const ri: u2 = @intCast(col & 0x3);
-                return fmtR(buf, start_pc, "SUBC", ri);
-            },
-            0x8...0xF => {
-                const d8 = rom[p];
-                const bit: u3 = @intCast(opcode & 0x07);
-                return fmtBitOp(buf, start_pc, "NOT1", decodeD9Addr(opcode, d8), bit);
-            },
-        },
-        0xC => switch (col) {
-            0x0 => return fmtI(buf, start_pc, "ROR"),
-            0x1 => return fmtI(buf, start_pc, "LDC"),
-            0x2, 0x3 => {
-                const d8 = rom[p];
-                return fmtA(buf, start_pc, "XCH", decodeD9Addr(opcode, d8));
-            },
-            0x4...0x7 => {
-                const ri: u2 = @intCast(col & 0x3);
-                return fmtR(buf, start_pc, "XCH", ri);
-            },
-            0x8...0xF => {
-                const d8 = rom[p];
-                const bit: u3 = @intCast(opcode & 0x07);
-                return fmtBitOp(buf, start_pc, "CLR1", decodeD9Addr(opcode, d8), bit);
-            },
-        },
-        0xD => switch (col) {
-            0x0 => return fmtI(buf, start_pc, "RORC"),
-            0x1 => {
-                const imm = rom[p];
-                return fmtImm(buf, start_pc, "OR", imm);
-            },
-            0x2, 0x3 => {
-                const d8 = rom[p];
-                return fmtA(buf, start_pc, "OR", decodeD9Addr(opcode, d8));
-            },
-            0x4...0x7 => {
-                const ri: u2 = @intCast(col & 0x3);
-                return fmtR(buf, start_pc, "OR", ri);
-            },
-            0x8...0xF => {
-                const d8 = rom[p];
-                const bit: u3 = @intCast(opcode & 0x07);
-                return fmtBitOp(buf, start_pc, "CLR1", decodeD9Addr(opcode, d8), bit);
-            },
-        },
-        0xE => switch (col) {
-            0x0 => return fmtI(buf, start_pc, "ROL"),
-            0x1 => {
-                const imm = rom[p];
-                return fmtImm(buf, start_pc, "AND", imm);
-            },
-            0x2, 0x3 => {
-                const d8 = rom[p];
-                return fmtA(buf, start_pc, "AND", decodeD9Addr(opcode, d8));
-            },
-            0x4...0x7 => {
-                const ri: u2 = @intCast(col & 0x3);
-                return fmtR(buf, start_pc, "AND", ri);
-            },
-            0x8...0xF => {
-                const d8 = rom[p];
-                const bit: u3 = @intCast(opcode & 0x07);
-                return fmtBitOp(buf, start_pc, "SET1", decodeD9Addr(opcode, d8), bit);
-            },
-        },
-        0xF => switch (col) {
-            0x0 => return fmtI(buf, start_pc, "ROLC"),
-            0x1 => {
-                const imm = rom[p];
-                return fmtImm(buf, start_pc, "XOR", imm);
-            },
-            0x2, 0x3 => {
-                const d8 = rom[p];
-                return fmtA(buf, start_pc, "XOR", decodeD9Addr(opcode, d8));
-            },
-            0x4...0x7 => {
-                const ri: u2 = @intCast(col & 0x3);
-                return fmtR(buf, start_pc, "XOR", ri);
-            },
-            0x8...0xF => {
-                const d8 = rom[p];
-                const bit: u3 = @intCast(opcode & 0x07);
-                return fmtBitOp(buf, start_pc, "SET1", decodeD9Addr(opcode, d8), bit);
-            },
-        },
+        .fmtA_abs => return fmtA(buf, start_pc, e.mnemonic, read16(operands, 0)),
+        .fmtR => return fmtR(buf, start_pc, e.mnemonic, @intCast(e.ri orelse 0)),
+        .fmtM => return fmtM(buf, start_pc, e.mnemonic, isa.decodeD9(opcode, operands[0]), operands[1]),
+        .fmtMR => return fmtMR(buf, start_pc, e.mnemonic, @intCast(e.ri orelse 0), operands[0]),
+        .fmtBitBranch => return fmtBitAddress(buf, start_pc, e.mnemonic, isa.decodeD9(opcode, operands[0]), @intCast(e.bit orelse 0)),
+        .fmtBitOp => return fmtBitAddress(buf, start_pc, e.mnemonic, isa.decodeD9(opcode, operands[0]), @intCast(e.bit orelse 0)),
+    };
+}
+
+fn read16(operands: []const u8, i: usize) u16 {
+    if (i + 1 < operands.len) {
+        return (@as(u16, operands[i + 1]) << 8) | @as(u16, operands[i]);
     }
     return 0;
 }
@@ -497,19 +184,7 @@ fn fmtMR(buf: []u8, pc: u16, mnem: []const u8, ri: u2, imm: u8) usize {
     return (std.fmt.bufPrint(buf, "{X:0>4}: {s} @R{d},#{X:0>2}h", .{ pc, mnem, ri, imm }) catch return 0).len;
 }
 
-fn fmtBI(buf: []u8, pc: u16, mnem: []const u8, imm: u8) usize {
-    return (std.fmt.bufPrint(buf, "{X:0>4}: {s} #{X:0>2}h", .{ pc, mnem, imm }) catch return 0).len;
-}
-
-fn fmtBPC(buf: []u8, pc: u16, mnem: []const u8, addr: u16, bit: u3) usize {
-    return (std.fmt.bufPrint(buf, "{X:0>4}: {s} {X:0>3}h.{d}", .{ pc, mnem, addr, bit }) catch return 0).len;
-}
-
-fn fmtBitBranch(buf: []u8, pc: u16, mnem: []const u8, addr: u16, bit: u3) usize {
-    return (std.fmt.bufPrint(buf, "{X:0>4}: {s} {X:0>3}h.{d}", .{ pc, mnem, addr, bit }) catch return 0).len;
-}
-
-fn fmtBitOp(buf: []u8, pc: u16, mnem: []const u8, addr: u16, bit: u3) usize {
+fn fmtBitAddress(buf: []u8, pc: u16, mnem: []const u8, addr: u16, bit: u3) usize {
     return (std.fmt.bufPrint(buf, "{X:0>4}: {s} {X:0>3}h.{d}", .{ pc, mnem, addr, bit }) catch return 0).len;
 }
 
@@ -579,57 +254,49 @@ pub fn formatSfrState(cpu: *Cpu, buf: []u8) usize {
 pub fn instSize(rom: []const u8, addr: u16) u16 {
     if (addr >= rom.len) return 1;
     const opcode = rom[addr];
-    const row: u4 = @truncate(opcode >> 4);
-    const col: u4 = @truncate(opcode);
+    return isa.TABLE[opcode].size;
+}
 
-    return switch (row) {
-        0x0 => switch (col) {
-            0x0 => 1, 0x1 => 2, 0x2, 0x3 => 2, 0x4...0x7 => 1, 0x8...0xF => 2,
-        },
-        0x1 => switch (col) {
-            0x0 => 3, 0x1 => 2, 0x2, 0x3 => 2, 0x4...0x7 => 1, 0x8...0xF => 2,
-        },
-        0x2 => switch (col) {
-            0x0, 0x1 => 3, 0x2, 0x3 => 3, 0x4...0x7 => 2, 0x8...0xF => 2,
-        },
-        0x3 => switch (col) {
-            0x0 => 1, 0x1, 0x2, 0x3 => 3, 0x4...0x7 => 2, 0x8...0xF => 2,
-        },
-        0x4 => switch (col) {
-            0x0 => 1, 0x1, 0x2, 0x3 => 3, 0x4...0x7 => 2, 0x8...0xF => 3,
-        },
-        0x5 => switch (col) {
-            0x0, 0x1 => 1, 0x2, 0x3 => 3, 0x4...0x7 => 2, 0x8...0xF => 3,
-        },
-        0x6 => switch (col) {
-            0x0, 0x1 => 2, 0x2, 0x3 => 2, 0x4...0x7 => 1, 0x8...0xF => 3,
-        },
-        0x7 => switch (col) {
-            0x0, 0x1 => 2, 0x2, 0x3 => 2, 0x4...0x7 => 1, 0x8...0xF => 3,
-        },
-        0x8 => switch (col) {
-            0x0 => 2, 0x1, 0x2, 0x3 => 2, 0x4...0x7 => 1, 0x8...0xF => 3,
-        },
-        0x9 => switch (col) {
-            0x0 => 2, 0x1, 0x2, 0x3 => 2, 0x4...0x7 => 1, 0x8...0xF => 3,
-        },
-        0xA => switch (col) {
-            0x0 => 1, 0x1, 0x2, 0x3 => 2, 0x4...0x7 => 1, 0x8...0xF => 2,
-        },
-        0xB => switch (col) {
-            0x0 => 1, 0x1, 0x2, 0x3 => 2, 0x4...0x7 => 1, 0x8...0xF => 2,
-        },
-        0xC => switch (col) {
-            0x0, 0x1 => 1, 0x2, 0x3 => 2, 0x4...0x7 => 1, 0x8...0xF => 2,
-        },
-        0xD => switch (col) {
-            0x0 => 1, 0x1, 0x2, 0x3 => 2, 0x4...0x7 => 1, 0x8...0xF => 2,
-        },
-        0xE => switch (col) {
-            0x0 => 1, 0x1, 0x2, 0x3 => 2, 0x4...0x7 => 1, 0x8...0xF => 2,
-        },
-        0xF => switch (col) {
-            0x0 => 1, 0x1, 0x2, 0x3 => 2, 0x4...0x7 => 1, 0x8...0xF => 2,
-        },
+/// Suivi des phases du BIOS à partir du PC courant.
+/// Retourne la phase uniquement la première fois qu'elle est observée.
+/// Remplacé std.debug.print par dbg.log() pour éviter la sortie [BIOS]
+/// lors des tests (log_level=.none dans makeCpu()).
+pub fn checkBiosPhase(cpu: *Cpu) ?Cpu.BiosPhase {
+    if (cpu.inst_bank.bank_id != .rom) {
+        if (cpu.bios_phase != .game_running) {
+            cpu.bios_phase = .game_running;
+            return .game_running;
+        }
+        return null;
+    }
+    const new_phase: ?Cpu.BiosPhase = switch (cpu.pc) {
+        0x0200 => .bios_init,
+        0x024C => .bios_clear_ram,
+        0x0294 => .bios_post_init,
+        0x02AF => .bios_date_wait,
+        0x02C2 => .bios_lcd_setup,
+        0x02EF => .bios_date_ok,
+        0x0317 => .bios_main_loop,
+        0x033A => .bios_mode_0,
+        0x0360 => .bios_mode_1,
+        0x0387 => .bios_mode_2,
+        0x03AE => .bios_game_launch,
+        0x03E1 => .bios_no_game,
+        else => null,
     };
+    if (new_phase) |phase| {
+        if (cpu.bios_phase != phase) {
+            log("PHASE CHANGE: {} -> {} PC={X:0>4} xram_wr={d} vtrbf_wr={d}", .{
+                cpu.bios_phase, phase, cpu.pc, cpu.xram_write_count, cpu.vtrbf_write_count,
+            });
+            cpu.bios_phase = phase;
+            const idx = @intFromEnum(phase);
+            const seen = &cpu.bios_phase_seen;
+            if (idx < seen.len and !seen[idx]) {
+                seen[idx] = true;
+                return phase;
+            }
+        }
+    }
+    return null;
 }
