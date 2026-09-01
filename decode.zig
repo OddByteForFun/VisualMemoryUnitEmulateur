@@ -23,9 +23,6 @@ pub fn step(cpu: *Cpu) u8 {
         cpu.requestLevelDrivenInterrupts();
         cpu.servicePendingInterrupt();
 
-        // Hardware behavior: ANY change on P3 pins wakes the CPU from HALT,
-        // regardless of P3INT configuration. P3INT only controls whether
-        // an interrupt is generated (or if the interrupt fires after wake).
         if (cpu.halted and cpu.p3_buttons != old_p3) {
             if (dbg.log_level == .trace) {
                 dbg.log("P3 WAKEUP: P3={X:0>2}->{X:0>2} PC={X:0>4} P3INT={X:0>2}", .{
@@ -429,14 +426,6 @@ pub fn step(cpu: *Cpu) u8 {
 fn signExt8(val: u8) u16 {
     return @bitCast(@as(i16, @as(i8, @bitCast(val))));
 }
-
-//fn readIndirectAddr(cpu: *Cpu, ri: u2) u9 {
-//    const irbk = (@as(u8, @bitCast(cpu.psw)) >> 3) & 0b11;
-//    const reg_addr: u4 = @truncate(irbk | @as(u4, ri));
-//    const reg_val = cpu.ram_bank0[reg_addr];
-//    const bit8: u9 = if (ri & 2 != 0) 0x100 else 0;
-//    return bit8 | reg_val;
-//}
 
 fn readIndirectAddr(cpu: *Cpu, ri: u2) u9 {
     const irbk: u4 = @truncate((@as(u8, @bitCast(cpu.psw)) >> 3) & 0b11);

@@ -246,11 +246,8 @@ pub const Cpu = struct {
         timer.tick(self, cycles_used);
     }
 
-    // gestion des interuptions.
-    // verification de certains flags posés par les timers
-    // complété par de nombreux flags
-    // Premières implémentations (INT2/TOL, INT3, T0H) basées sur les timers
-    // p314
+    // Gestion des interruptions — vérification des flags posés par les timers
+    // et autres sources (p314)
 
     pub const Interruptions = enum(u8) {
         int2, // t0l
@@ -290,10 +287,8 @@ pub const Cpu = struct {
         const t0cnt = self.sfr_raw[SFR_T0CNT];
         const btcr = self.sfr_raw[SFR_BTCR];
 
-        if (ie & 0x80 == 0) return; // pas d'interruptions autorisées (EA)
+        if (ie & 0x80 == 0) return;
 
-        // Sur le vrai LC86K, IE ne contient que EA (bit7) + IE1/IE0 (priorité INT0/INT1).
-        // Les enables individuels sont dans les registres des périphériques (T0CNT, BTCR, T1CNT).
         if (t0cnt & T0CNT_T0LOVF != 0 and t0cnt & T0CNT_T0LIE != 0) {
             val = .int2;
         } else if ((btcr & BTCR_BT0_FLAG != 0 and btcr & BTCR_BT0_IE != 0) or
@@ -312,9 +307,6 @@ pub const Cpu = struct {
         }
 
         // Port 3 interrupt (priority 10, vector 0x004BH)
-        // Continuous mode (P32INT=1): Source flag set while any P3 pin is LOW (button pressed)
-        // Edge mode (P32INT=0): Source flag set on falling edge (handled in P3 setter)
-        // Interrupt fires when Enable (P30INT) AND Source (P31INT) are both set
         if (val == null) {
             const p3int = self.sfr_raw[SFR_P3INT];
             if (p3int & P3INT_P30INT != 0 and p3int & P3INT_P31INT != 0) {
@@ -323,7 +315,6 @@ pub const Cpu = struct {
         }
 
         // Maple IRQ 9 (IRQ RFB, vector 0x0043)
-        // Triggered when Maple transfer completes (TXDONE or IRQREQ in MPLSTA)
         if (val == null and self.maple_irq_pending) {
             val = .maple;
         }
@@ -354,9 +345,6 @@ pub const Cpu = struct {
                 self.sfr_raw[SFR_T1CNT] &= ~(T1CNT_T1HOVF | T1CNT_T1LOVF);
             },
             .p3 => {
-                // Real VMU hardware clears the source flag when servicing the P3 interrupt.
-                // If we leave P31INT set, the BIOS re-enters the same IRQ forever and loops
-                // in the ROM launch wrapper instead of switching into the game.
                 self.sfr_raw[SFR_P3INT] &= ~P3INT_P31INT;
             },
             .maple => self.maple_irq_pending = false,

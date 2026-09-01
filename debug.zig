@@ -104,8 +104,6 @@ pub fn getRingLine(idx: usize) ?[]const u8 {
     return log_ring[actual][0..len];
 }
 
-// decodeD9Addr supprimé — utiliser isa.decodeD9(opcode, val) directement
-
 pub fn disassembleAt(cpu: *Cpu, buf: []u8, pc: u16) usize {
     const rom = cpu.inst_bank.data;
     if (pc >= rom.len) return 0;

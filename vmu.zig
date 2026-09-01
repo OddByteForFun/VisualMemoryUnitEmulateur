@@ -8,7 +8,6 @@ const Cpu = @import("lc86K").Cpu;
 
 /// Initialize VMU flash with a proper filesystem (same layout as DreamPotato).
 /// Flash = 128KB = 256 blocks × 512 bytes.
-/// Blocks 0-199: user data, 200-240: hidden, 241-253: directory, 254: FAT, 255: root.
 pub fn initVmuFlash(cpu: *Cpu) void {
     const flash = &cpu.flash;
     // Erased flash is 0xFF

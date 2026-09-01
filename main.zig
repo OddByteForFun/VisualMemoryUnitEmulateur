@@ -118,10 +118,6 @@ pub fn main(init: std.process.Init) !void {
 
             if (cpu.halted) {
                 stuck_count = 0;
-                // The base timer runs on a 32.768kHz quartz oscillator that keeps
-                // ticking even when the CPU is halted. Simulate the full frame's
-                // worth of timer ticks so the base timer can fire INT3 and wake
-                // the CPU from HALT.
                 const remaining: u32 = @intCast(cycles_per_frame - i);
                 var ticked: u32 = 0;
                 while (ticked < remaining) {
@@ -148,8 +144,7 @@ pub fn main(init: std.process.Init) !void {
         }
 
         if (!bios_menu_selected and cpu.bios_phase == .bios_game_launch) {
-            // Hardware-like transition: clear the full P3 latch before the game starts so no
-            // stale BIOS MODE or Start state leaks into flash0 execution.
+            // Clear P3 latch before game starts
             cpu.p3_buttons = 0xFF;
             cpu.prev_p3_buttons = 0xFF;
             cpu.ram_bank0[0x70] = 0xFF;
@@ -252,9 +247,6 @@ fn updateButtons(cpu: *Cpu) void {
         cpu.bios_phase == .bios_game_launch or
         (cpu.pc >= 0xE120 and cpu.pc <= 0xE1A0);
 
-    // Real VMU BIOS launch is edge-driven: the menu wrapper confirms on a clean MODE
-    // press, not on a stale held state. Repeating the same low level every frame makes
-    // the P3 latch stick and prevents the ROM launch wrapper from advancing.
     const mode_key_pressed = rl.isKeyPressed(.m);
     const title_start_pressed = rl.isKeyPressed(.enter) or rl.isKeyPressed(.space);
     if (bios_launch_window) {
@@ -281,8 +273,7 @@ fn updateButtons(cpu: *Cpu) void {
     }
 
     // Title screen Start is a distinct press edge. Never auto-send Start when the game is
-    // just booting into flash0; otherwise the title screen is skipped and the game jumps to
-    // the post-title state without user input.
+    // just booting into flash0; otherwise the title screen is skipped.
     if (!bios_launch_window and cpu.inst_bank.bank_id == .flash0) {
         if (title_start_pressed) {
             buttons &= ~@as(u8, 0x40); // P3.6 = Start pulse
@@ -299,29 +290,21 @@ fn updateButtons(cpu: *Cpu) void {
     cpu.ram_bank0[0x70] = buttons;
 
     // Match the BIOS harness: during the launch menu, a held MODE state must assert
-    // P31INT directly so the ROM launch wrapper can continue. Keep the generic logic
-    // for other buttons, but do not rely on it for BIOS selection confirmation.
+    // P31INT directly so the ROM launch wrapper can continue.
     var p3int = cpu.sfr_raw[Cpu.SFR_P3INT]; // P3INT
     const p30int = p3int & Cpu.P3INT_P30INT != 0; // P30INT: enable interrupt
     const p32int = p3int & Cpu.P3INT_P32INT != 0; // P32INT: 1=continuous, 0=edge
     const any_pressed = buttons != 0xFF;
-    // MODE is a single valid edge pulse during BIOS launch; do not keep asserting P31INT
-    // on every frame after a stale low-level latch remains on the port.
+    // MODE is a single valid edge pulse during BIOS launch
     const force_bios_mode_int = bios_launch_window and mode_key_pressed;
 
     if (p30int and ((p32int and any_pressed) or force_bios_mode_int)) {
         p3int |= Cpu.P3INT_P31INT; // set P31INT source flag only for a valid BIOS launch edge
     } else {
-        // A stale source flag blocks the next valid press and makes the BIOS loop on the
-        // same interrupt forever. Clear it when the button is released or the launch window
-        // is no longer asserting a valid low-level P3 input.
         p3int &= ~Cpu.P3INT_P31INT;
     }
 
     cpu.sfr_raw[Cpu.SFR_P3INT] = p3int;
-    // VMU P3 is active-low: 0xFF means no buttons pressed. Writing 0x00 here would
-    // falsely assert every button at once and make the game see a spurious all-keys
-    // press/release pattern instead of a stable held directional input.
     if (buttons == 0xFF) {
         cpu.ram_bank0[0x70] = 0xFF;
     }
