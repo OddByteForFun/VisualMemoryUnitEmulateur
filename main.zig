@@ -14,10 +14,7 @@ const FG = rl.Color.init(20, 20, 20, 255);
 const BG = rl.Color.init(190, 210, 180, 255);
 
 var azerty_mode: bool = false;
-var bios_menu_mode_flag: bool = false;
-var bios_menu_active: bool = false;
-var bios_menu_selected: bool = false;
-var bios_menu_index: u32 = 0;
+var game_started: bool = false; // Track when game launches from BIOS
 var start_pulse_frames: u32 = 0;
 
 pub fn main(init: std.process.Init) !void {
@@ -32,7 +29,7 @@ pub fn main(init: std.process.Init) !void {
         if (std.mem.eql(u8, arg, "--azerty")) {
             azerty_mode = true;
         } else if (std.mem.eql(u8, arg, "--bios-menu")) {
-            bios_menu_mode_flag = true;
+            // BIOS menu mode flag (kept for CLI compatibility)
         } else if (path_a == null) {
             path_a = arg;
         } else if (path_b == null) {
@@ -45,10 +42,10 @@ pub fn main(init: std.process.Init) !void {
         return;
     };
 
-    const use_bios_menu: bool = bios_menu_mode_flag or path_b != null;
+    const use_bios_menu: bool = path_b != null;
 
     // 2 files: first=BIOS, second=game | 1 file: game only, BIOS auto-detected
-    const bios_path: []const u8 = if (path_b != null) path_a.? else "roms/vmu_bios_jp.bin";
+    const bios_path: []const u8 = if (path_b != null) path_a.? else "roms/bios/vmu_bios_jp.bin";
     const game_path: []const u8 = if (path_b) |b| b else path_a.?;
 
     const dir = std.Io.Dir.cwd();
@@ -83,7 +80,6 @@ pub fn main(init: std.process.Init) !void {
     vmu.initBiosRtc(&cpu, use_bios_menu);
 
     if (use_bios_menu) {
-        bios_menu_active = true;
         std.debug.print("BIOS menu mode enabled: P7=0x{X:0>2} (non-standalone => BIOS file menu path)\n", .{ cpu.sfr_raw[Cpu.SFR_P7] });
     }
 
@@ -143,7 +139,7 @@ pub fn main(init: std.process.Init) !void {
             }
         }
 
-        if (!bios_menu_selected and cpu.bios_phase == .bios_game_launch) {
+        if (!game_started and cpu.bios_phase == .bios_game_launch) {
             // Clear P3 latch before game starts
             cpu.p3_buttons = 0xFF;
             cpu.prev_p3_buttons = 0xFF;
@@ -151,45 +147,44 @@ pub fn main(init: std.process.Init) !void {
             cpu.sfr_raw[Cpu.SFR_P3INT] = 0xFD;
             cpu.setInstructionBank(.flash0);
             cpu.pc = 0x0000;
-            bios_menu_selected = true;
-            bios_menu_active = false;
+            game_started = true;
             start_pulse_frames = 0;
         }
 
         rl.beginDrawing();
         rl.clearBackground(BG);
-        if (bios_menu_active and !bios_menu_selected) {
-            drawBiosMenuScreen(game_path);
-        } else {
-            renderLcd(&cpu);
-        }
-
+        
+        // Always render the actual LCD content (bitmap from XRAM)
+        renderLcd(&cpu);
+        
+        // Display debug info overlay with BIOS context
         var buf: [256]u8 = undefined;
-        const status = std.fmt.bufPrintZ(&buf, "PC=0x{X:0>4} ext={X:0>2} sync={d} xram_wr={d}", .{ cpu.pc, cpu.pending_ext, cpu.sync_count, cpu.xram_write_count }) catch "??";
+        var phase_str: []const u8 = "none";
+        if (cpu.bios_phase != .none) {
+            phase_str = switch (cpu.bios_phase) {
+                .bios_init => "init",
+                .bios_clear_ram => "clear_ram",
+                .bios_post_init => "post_init",
+                .bios_date_wait => "date_wait",
+                .bios_lcd_setup => "lcd_setup",
+                .bios_date_ok => "date_ok",
+                .bios_main_loop => "main_loop",
+                .bios_mode_0 => "mode_0",
+                .bios_mode_1 => "mode_1",
+                .bios_mode_2 => "mode_2",
+                .bios_game_launch => "game_launch",
+                .bios_no_game => "no_game",
+                .game_running => "game_running",
+                .none => "none",
+            };
+        }
+        const status = std.fmt.bufPrintZ(&buf, "PC=0x{X:0>4} ext={X:0>2} phase={s} xram_wr={d}", .{ cpu.pc, cpu.pending_ext, phase_str, cpu.xram_write_count }) catch "??";
         rl.drawText(status, 4, win_h - 18, 14, rl.Color.white);
 
         rl.endDrawing();
         frames += 1;
 
     }
-}
-
-fn drawBiosMenuScreen(game_path: []const u8) void {
-    rl.clearBackground(rl.Color.black);
-    rl.drawRectangle(0, 0, LCD_W * SCALE, LCD_H * SCALE, rl.Color.black);
-    rl.drawText("SEGA", 8, 4, 14, rl.Color.white);
-    rl.drawText("Visual Memory", 8, 20, 10, rl.Color.white);
-    rl.drawText("---", 8, 30, 10, rl.Color.white);
-
-    const name = if (std.mem.lastIndexOfScalar(u8, game_path, '/')) |idx| game_path[idx + 1 ..] else game_path;
-    var y: i32 = 42;
-    rl.drawText(">", 8, y, 10, rl.Color.white);
-    var buf: [128:0]u8 = @splat(0);
-    const label = std.fmt.bufPrintZ(&buf, "{s}", .{name}) catch "GAME";
-    rl.drawText(label, 20, y, 10, rl.Color.white);
-
-    y += 12;
-    rl.drawText("MODE to launch", 8, y, 9, rl.Color.white);
 }
 
 fn renderLcd(cpu: *Cpu) void {
