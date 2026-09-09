@@ -11,12 +11,60 @@ const Cpu = @import("lc86K").Cpu;
 pub fn initVmuFlash(cpu: *Cpu) void {
     const flash = &cpu.flash;
     // Erased flash is 0xFF
-    @memset(flash, 0xFF);
+    // @memset(flash, 0xFF);
 
     // --- Root block (block 255, offset 0x1FE00) ---
-    const rb: usize = 255 * 512;
+    // taille globale soir 256*512 = 128 Kb
+    // 0x000 - 0 x0c7 données utilisateur
+    // 0x0c8 - 0x0f8 zone reservée
+    // 0x0f1 - 0x0fd repertoire
+    // 0x0fe FAT
+    // 0x0ff Root
+
+    // 0xFFFC = bloc libre
+    // 0xFFFA = fin de chaîne
+    // 0xFFFF = bloc défectueux
+
+    const rb: usize = 255 * 512; // rootblock
+
+    // https://www.elysianshadows.com/vmu/filesystem.html
+    // https://kos-docs.dreamcast.wiki/structvmu__dir__t.html#details
+    // il s'agit de commencer par le root bloc :
+    //    offset  taille  champ
+    // --------------------------------
+    // 0x00    16      Magic
+    // 0x10    32      Volume Label
+    // 0x30     8      Timestamp
+    // 0x40     2      VolumeLast (255)
+    // 0x42     2      Partition (0)
+    // 0x44     2      Root (255)
+    // 0x46     2      FATFirst (254)
+    // 0x48     2      FATSize (1)
+    // 0x4A     2      DirLast (253)
+    // 0x4C     2      DirSize (13)
+    // 0x4E     1      Icon (0-123)
+    // 0x4F     1      Sort (0)
+    // 0x50     2      HiddenFirst (200)
+    // 0x52     2      HiddenSize (31)
+    // 0x54     2      GameFirst (0)
+    // 0x56     2      GameSize (128)
+    // tout le reste est reservé
     // Magic 0x55 at 0x00-0x0F
-    for (0..16) |i| flash[rb + i] = 0x55;
+    // Le directory occupe de 253 à 241 soit 13 blocs
+
+    for (0..16) |i| flash[rb + i] = 0x55; // magic
+    // Volume label / color
+    flash[rb + 0x10] = 0x00; // standard color
+    flash[rb + 0x11] = 0x00;
+    flash[rb + 0x12] = 0x00;
+    flash[rb + 0x13] = 0x00;
+    flash[rb + 0x14] = 0x00;
+
+    // Reserved
+    @memset(flash[rb + 0x15 .. rb + 0x30], 0);
+    // Reserved
+    @memset(flash[rb + 0x38 .. rb + 0x40], 0);
+
     // VolumeLast at 0x40
     flash[rb + 0x40] = 0xFF;
     flash[rb + 0x41] = 0xFF;
@@ -46,7 +94,7 @@ pub fn initVmuFlash(cpu: *Cpu) void {
     flash[rb + 0x50] = 0xC8;
     flash[rb + 0x51] = 0x00;
     // HiddenSize at 0x52
-    flash[rb + 0x52] = 0x29;
+    flash[rb + 0x52] = 0x1F; // 200
     flash[rb + 0x53] = 0x00;
     // GameFirst at 0x54
     flash[rb + 0x54] = 0x00;
@@ -58,7 +106,18 @@ pub fn initVmuFlash(cpu: *Cpu) void {
     // --- FAT (block 254, offset 0x1FC00) ---
     const fb: usize = 254 * 512;
     // All entries start as 0xFF (unallocated), already set by memset
+    // 0xFFFC = Unallocated / Free
+    // 0xFFFF = Damaged
+    // 0xFFFA = Last in file
     // Mark root block as FAT_LastInFile
+
+    // cela remplit la flash avec 0xFFFC
+
+    for (0..256) |i| {
+        flash[fb + i * 2] = 0xFC;
+        flash[fb + i * 2 + 1] = 0xFF;
+    }
+
     flash[fb + 255 * 2] = 0xFA;
     flash[fb + 255 * 2 + 1] = 0xFF;
     // Mark FAT block itself as FAT_LastInFile
@@ -66,7 +125,7 @@ pub fn initVmuFlash(cpu: *Cpu) void {
     flash[fb + 254 * 2 + 1] = 0xFF;
     // Directory chain: block 253 → 252 → ... → 241 → FAT_LastInFile
     {
-        var i: u16 = 253;
+        var i: usize = 253;
         while (i > 241) : (i -= 1) {
             flash[fb + i * 2] = @intCast(i - 1);
             flash[fb + i * 2 + 1] = 0x00;
@@ -76,6 +135,7 @@ pub fn initVmuFlash(cpu: *Cpu) void {
     }
 
     // Directory table (blocks 241-253) is already 0xFF → all entries Type=0x00 (None)
+    @memset(flash[241 * 512 .. 254 * 512], 0x00);
 }
 
 /// Create the directory entry for the game at directory table (block 253,
@@ -89,6 +149,7 @@ pub fn installGame(cpu: *Cpu, game_size: usize) void {
     flash[dir_base + 0x02] = 0x00; // StartFAT low = 0
     flash[dir_base + 0x03] = 0x00; // StartFAT high = 0
     // Filename: 12 bytes at offset 0x04 (padded with 0)
+    @memset(flash[dir_base + 0x04 .. dir_base + 0x10], 0x00);
     const game_name = "GAME";
     for (game_name, 0..) |ch, idx| {
         flash[dir_base + 0x04 + idx] = ch;
@@ -101,9 +162,11 @@ pub fn installGame(cpu: *Cpu, game_size: usize) void {
     flash[dir_base + 0x1A] = 0x01;
     flash[dir_base + 0x1B] = 0x00;
 
+    @memset(flash[dir_base + 0x1C .. dir_base + 0x20], 0x00);
+
     // Set up FAT chain for game blocks (block 0 → 1 → 2 → ... → FAT_LastInFile)
     const fat_base: usize = 254 * 512;
-    const last_game_block: u16 = @intCast((game_size + 511) / 512 - 1);
+    const last_game_block: u16 = if (game_size > 0 and game_size >= 2 * 512) @intCast((game_size + 511) / 512 - 1);
     {
         var b: u16 = 0;
         while (b <= last_game_block) : (b += 1) {
