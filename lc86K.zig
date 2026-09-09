@@ -432,6 +432,9 @@ pub const Cpu = struct {
     pub const SFR_I23CR: u7 = 0x5E; // sélection front externe INT2/INT3
     pub const SFR_ISL: u7 = 0x5F; //  sélection entrée externe et horloge
     pub const SFR_MCR: u7 = 0x20; // LCD Mode Control
+    pub const SFR_STAD: u7 = 0x22; // Display start address (VMU.pdf VMD-123)
+    pub const SFR_CNR: u7 = 0x23; // Character count register (BIOS only, VMU.pdf VMD-130)
+    pub const SFR_TDR: u7 = 0x24; // Time division register (BIOS only, VMU.pdf VMD-130)
     pub const SFR_VCCR: u7 = 0x27; // LCD contrast/power control
 
     // T0CNT bits
@@ -510,6 +513,16 @@ pub const Cpu = struct {
                 self.p3_read_count += 1;
                 return self.p3_buttons;
             },
+            SFR_P7 => {
+                // Port 7 : détection tension, read-only (VMU.pdf VMD-56)
+                // P73/P72 = ID (00), P71 = low battery (1=ok), P70 = 5V detection
+                // Reset : HHHH_0010 → bits 7:4 pull-up high
+                if (self.dreamcast_connected) {
+                    return 0xF2; // P71=1 (pas low battery), P70=0 (5V présente)
+                } else {
+                    return 0xF3; // P71=1 (pas low battery), P70=1 (pas de 5V)
+                }
+            },
             SFR_VTRBF => {
                 const addr = self.vrmad & 0x1FF;
                 const data = if (addr < 512) self.work_ram[addr] else 0xFF;
@@ -567,9 +580,11 @@ pub const Cpu = struct {
                     self.t0h_counter = self.sfr_raw[SFR_T0HR];
                 }
             },
-            SFR_MCR => {}, // MCR (LCD Mode Control)
+            SFR_MCR => {}, // MCR (LCD Mode Control) — stocké via ligne 530
+            SFR_STAD => {}, // STAD (Display start address) — utilisé par getXramByte dans main.zig
+            SFR_CNR => {}, // CNR (Character count) — BIOS only, non utilisé par les apps
+            SFR_TDR => {}, // TDR (Time division) — BIOS only, non utilisé par les apps
             SFR_VCCR => {}, // VCCR (LCD contrast/power)
-            0x22 => {}, // STAD (Display start address)
             SFR_VSEL => { // VSEL: bits read/write (reset defaults: 0xFC)
                 self.sfr_raw[SFR_VSEL] = val;
             },

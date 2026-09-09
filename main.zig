@@ -241,7 +241,8 @@ fn getXramByte(cpu: *Cpu, row: u32, byte_col: u32) u8 {
     if (row >= LCD_H) return 0;
     const xram_row = row / 2;
     const row_in_pair = row % 2;
-    const offset = xram_row * 16 + row_in_pair * 6 + byte_col;
+    const stad = @as(u32, cpu.sfr_raw[Cpu.SFR_STAD]); // VMU.pdf VMD-123: STAD × 2 = offset XRAM
+    const offset = (xram_row * 16 + row_in_pair * 6 + byte_col + stad * 2) % 256;
     if (offset < 128) return cpu.xram_banks.bank0[offset];
     if (offset < 256) return cpu.xram_banks.bank1[offset - 128];
     return 0;
