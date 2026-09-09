@@ -517,11 +517,8 @@ pub const Cpu = struct {
                 // Port 7 : détection tension, read-only (VMU.pdf VMD-56)
                 // P73/P72 = ID (00), P71 = low battery (1=ok), P70 = 5V detection
                 // Reset : HHHH_0010 → bits 7:4 pull-up high
-                if (self.dreamcast_connected) {
-                    return 0xF2; // P71=1 (pas low battery), P70=0 (5V présente)
-                } else {
-                    return 0xF3; // P71=1 (pas low battery), P70=1 (pas de 5V)
-                }
+                // TODO: retourner 0xF3 en standalone quand le BIOS gèrera le mode autonome
+                return 0xF2; // P71=1 (pas low battery), P70=0 (5V présente)
             },
             SFR_VTRBF => {
                 const addr = self.vrmad & 0x1FF;
