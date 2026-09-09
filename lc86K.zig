@@ -78,6 +78,11 @@ pub const Cpu = struct {
     base_timer_acc: u32 = 0,
     base_timer_counter: u16 = 0,
 
+    // Horloge dynamique (Phase 1)
+    dreamcast_connected: bool = true, // true = Dreamcast (6 MHz), false = standalone (OCR-déterminé)
+    cpu_freq: u32 = 6_000_000, // fréquence CPU courante en Hz
+    fBST_per_cycle_fp: u32 = 357, // (FST_FREQ << 16) / cpu_freq, ticks fBST par cycle CPU en fixed-point Q16
+
     // interruptions
     interrupt_depth: u8 = 0, // verifier sur une IRQ est possible (0, ok, 1 attente RETI)
     interrupt_blocked: u8 = 0,
@@ -128,6 +133,8 @@ pub const Cpu = struct {
         cpu.sfr_raw[SFR_VSEL] = 0xFC; // 163H: VTRBF control (INCE=1 + reset defaults)
         cpu.sfr_raw[SFR_EXT] = 0x80; // 10DH: External memory control (Ext3=1, Ext0=0 → ROM)
         cpu.pending_ext = 0x80; // Ext3=1, Ext0=0 → ROM mode
+        // Calcule l'horloge initiale (dreamcast_connected=true par défaut → 6 MHz)
+        cpu.updateClock();
         return cpu;
     }
 
@@ -165,6 +172,8 @@ pub const Cpu = struct {
         self.sfr_raw[SFR_EXT] = 0x80; // 10DH: External memory control (Ext3=1, Ext0=0 → ROM)
         self.inst_bank = .{ .data = self.rom_data, .bank_id = .rom };
         self.pending_ext = 0x80; // Ext3=1, Ext0=0 → ROM mode (comme DreamPotato)
+        // Calcule l'horloge initiale (OCR=0 → RC /12 après reset hardware)
+        self.updateClock();
     }
 
     /// Synchronise l'inst_bank avec la valeur courante de pending_ext.
@@ -244,6 +253,38 @@ pub const Cpu = struct {
     pub fn tickTimers(self: *Cpu, cycles_used: u8) void {
         const timer = @import("timer");
         timer.tick(self, cycles_used);
+    }
+
+    // ── Horloge dynamique (OCR) ──────────────────────────────────────
+    // VMU.txt:5098-5021 : deux oscillateurs internes + clock externe Dreamcast.
+    // OCR7=1→/6, OCR7=0→/12. OCR5:4=00→RC, 10→Quartz.
+
+    /// Fréquences des oscillateurs internes (VMU.txt:15103-15108)
+    pub const RC_FREQ: u32 = 879_236; // oscillateur RC ~879 kHz
+    pub const QUARTZ_FREQ: u32 = 32_768; // oscillateur quartz 32,768 Hz
+    pub const DREAMCAST_FREQ: u32 = 6_000_000; // clock externe Maple bus
+
+    /// Recalcule cpu_freq et fBST_per_cycle_fp à partir du registre OCR.
+    /// En mode Dreamcast, la fréquence est toujours 6 MHz (clock externe).
+    pub fn updateClock(self: *Cpu) void {
+        if (self.dreamcast_connected) {
+            self.cpu_freq = DREAMCAST_FREQ;
+        } else {
+            const ocr = self.sfr_raw[SFR_OCR];
+            // OCR5:4 = source d'horloge système
+            const src: u2 = @truncate((ocr & 0x30) >> 4);
+            const base_freq: u32 = switch (src) {
+                0b00 => RC_FREQ, // RC oscillator
+                0b10 => QUARTZ_FREQ, // Quartz oscillator
+                else => self.cpu_freq, // état prohibé : garder la fréquence courante
+            };
+            // OCR7 = diviseur : 0→/12, 1→/6
+            const div: u32 = if (ocr & 0x80 != 0) 6 else 12;
+            self.cpu_freq = base_freq / div;
+        }
+        // Fixed-point Q16 : ticks fBST par cycle CPU = FST_FREQ / cpu_freq
+        // Au maximum 1 tick par cycle (quartz /12 = 2731 Hz → 32768/2731 ≈ 12)
+        self.fBST_per_cycle_fp = (FST_FREQ << 16) / self.cpu_freq;
     }
 
     // Gestion des interruptions — vérification des flags posés par les timers
@@ -588,6 +629,10 @@ pub const Cpu = struct {
                 self.ext_write_pc = self.pc;
                 self.pending_ext = val;
             },
+            SFR_OCR => {
+                // OCR : recalcule l'horloge CPU (VMU.txt:15257-15342)
+                self.updateClock();
+            },
 
             else => {},
         }
@@ -641,7 +686,13 @@ pub const Cpu = struct {
     }
 
     /// STF: write flash at 17-bit address (only if FlashWriteUnlock sequence matched)
+    /// VMU.txt:8532 : l'écriture flash nécessite l'oscillateur RC comme horloge système.
     pub fn writeFlash(self: *Cpu, val: u8) void {
+        // Guard standalone : flash write requiert RC oscillator (OCR5:4 = 00)
+        if (!self.dreamcast_connected) {
+            const ocr_src: u2 = @truncate((self.sfr_raw[SFR_OCR] & 0x30) >> 4);
+            if (ocr_src != 0b00) return; // flash write refusé sans RC
+        }
         const a17: u17 = @as(u17, self.trl) | (@as(u17, self.trh) << 8) | (if (self.sfr_raw[SFR_FPR] & 0x01 != 0) @as(u17, 0x10000) else 0);
         if (a17 < 131072) {
             self.flash[a17] = val;

@@ -24,12 +24,15 @@ pub fn main(init: std.process.Init) !void {
 
     var path_a: ?[]const u8 = null;
     var path_b: ?[]const u8 = null;
+    var standalone_mode: bool = false;
 
     while (arg_iter.next()) |arg| {
         if (std.mem.eql(u8, arg, "--azerty")) {
             azerty_mode = true;
         } else if (std.mem.eql(u8, arg, "--bios-menu")) {
             // BIOS menu mode flag (kept for CLI compatibility)
+        } else if (std.mem.eql(u8, arg, "--standalone")) {
+            standalone_mode = true;
         } else if (path_a == null) {
             path_a = arg;
         } else if (path_b == null) {
@@ -38,7 +41,7 @@ pub fn main(init: std.process.Init) !void {
     }
 
     _ = path_a orelse {
-        std.debug.print("Usage: lc86K [<bios.bin>] <game.vms> [--azerty] [--bios-menu]\n", .{});
+        std.debug.print("Usage: lc86K [<bios.bin>] <game.vms> [--azerty] [--bios-menu] [--standalone]\n", .{});
         return;
     };
 
@@ -60,6 +63,8 @@ pub fn main(init: std.process.Init) !void {
     std.debug.print("BIOS: {s} ({d} bytes)\n", .{ bios_path, bios_size });
 
     var cpu = Cpu.init(rom);
+    cpu.dreamcast_connected = !standalone_mode;
+    cpu.updateClock(); // applique le mode d'horloge
 
     // Initialize a proper VMU flash filesystem (same approach as DreamPotato)
     vmu.initVmuFlash(&cpu);
@@ -82,6 +87,11 @@ pub fn main(init: std.process.Init) !void {
     if (use_bios_menu) {
         std.debug.print("BIOS menu mode enabled: P7=0x{X:0>2} (non-standalone => BIOS file menu path)\n", .{ cpu.sfr_raw[Cpu.SFR_P7] });
     }
+    if (standalone_mode) {
+        std.debug.print("Standalone mode: CPU={d} Hz, fBST/cycle={d}/65536\n", .{ cpu.cpu_freq, cpu.fBST_per_cycle_fp });
+    } else {
+        std.debug.print("Dreamcast mode: CPU=6 MHz (external clock)\n", .{});
+    }
 
     const win_w: i32 = LCD_W * SCALE;
     const win_h: i32 = LCD_H * SCALE + 24 + SCALE + 8;
@@ -101,7 +111,7 @@ pub fn main(init: std.process.Init) !void {
         rl.pollInputEvents();
         updateButtons(&cpu);
 
-        const cycles_per_frame: u64 = 100_000;
+        const cycles_per_frame: u64 = cpu.cpu_freq / 60;
         var i: u64 = 0;
         while (i < cycles_per_frame) : (i += 1) {
             _ = step(&cpu);
@@ -154,8 +164,13 @@ pub fn main(init: std.process.Init) !void {
         rl.beginDrawing();
         rl.clearBackground(BG);
         
-        // Always render the actual LCD content (bitmap from XRAM)
-        renderLcd(&cpu);
+        // LCD ghosting : ne rafraîchir que si MCR bit3 (LCD update enable) ET VCCR bit7 (LCD on)
+        // VMU.txt:13502, 13878-13884 : accès XRAM interdit si quartz sélectionné, LCD off si VCCR7=0
+        const mcr = cpu.sfr_raw[Cpu.SFR_MCR];
+        const vccr = cpu.sfr_raw[Cpu.SFR_VCCR];
+        if (mcr & 0x08 != 0 and vccr & 0x80 != 0) {
+            renderLcd(&cpu);
+        }
         
         // Display debug info overlay with BIOS context
         var buf: [256]u8 = undefined;

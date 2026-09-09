@@ -74,12 +74,12 @@ Build Summary: 3/3 steps succeeded; 92/92 tests passed
 ### P1 — périphériques et matériel VMU
 - [ ] I/O Ports P1, P3, P7 — boutons, état connexion, modes d'entrée
 - [ ] Contrôle LCD XBNK, VCCR, MCR, CNR, TDR
-- [ ] Contrôle horloge OCR, ISL, division d'horloge
+- [x] Contrôle horloge OCR, ISL, division d'horloge — mode Dreamcast (6 MHz) + standalone (RC/Quartz via `--standalone`)
 - [ ] Maple MPLSW, MPLSTA, MPLRST
 - [ ] Série SCON0/1, SBUF0/1, SBR
-- [ ] Flash FPR, EXT (bank switching)
+- [x] Flash FPR, EXT (bank switching) — guard RC oscillator en standalone
 - [ ] Work RAM VRMAD, VTRBF
-- [ ] Power PCON (halt)
+- [x] Power PCON (halt) — wakeup par interrupt et edge P3
 
 ### P2 — fonctionnalités de simulation plus avancées
 - [ ] Affichage 48×32 depuis XRAM

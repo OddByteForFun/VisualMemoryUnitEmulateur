@@ -501,22 +501,53 @@ Deux fréquences coexistent :
 
 | Horloge | Fréquence | Rôle |
 |---------|-----------|------|
-| **Horloge CPU** | ~6 MHz | cadence les instructions et Timers 0/1 |
+| **Horloge CPU** | 6 MHz (Dreamcast) ou variable (standalone) | cadence les instructions et Timers 0/1 |
 | **Quartz RTC (fBST)** | 32 768 Hz | cadence le Base Timer |
 
 > `fBST` = « **f**réquence **B**ase **S**ystem **T**imer ». C'est le quartz d'horlogerie de
 > la RTC (une seconde en 32 768 ticks, un nombre très pratique en binaire).
 
-Un rapport essentiel, défini dans `lc86K.zig` :
+#### Mode Dreamcast (connecté)
+
+Quand la VMU est branchée sur la Dreamcast via le bus Maple, celle-ci fournit une
+horloge externe de **6 MHz**. Le registre OCR n'a pas d'effet sur la fréquence CPU.
+
+#### Mode standalone (autonome)
+
+En mode autonome, la VMU utilise ses oscillateurs internes. Le registre OCR
+(`SFR_OCR`, 0x0E) contrôle la source et le diviseur :
+
+| OCR5:OCR4 | Source | Fréquence |
+|-----------|--------|-----------|
+| 00 | RC oscillator | 879 236 Hz |
+| 10 | Quartz oscillator | 32 768 Hz |
+
+| OCR7 | Diviseur | Résultat (RC) | Résultat (Quartz) |
+|------|----------|---------------|-------------------|
+| 0 | /12 | ~73 kHz | ~2 731 Hz |
+| 1 | /6 | ~146 kHz | ~5 461 Hz |
+
+> Après le reset hardware, le BIOS démarre en RC /12 (~73 kHz), puis bascule vers
+> Quartz /6 (~5,4 kHz) pour économiser la batterie.
+
+#### Constantes dans le code
 
 ```zig
-pub const CPU_FREQ: u32 = 6_000_000;
-pub const FST_FREQ: u32 = 32_768;
-pub const CYCLES_PER_FBST_TICK: u32 = CPU_FREQ / FST_FREQ; // = 183
+// Fréquences des oscillateurs (lc86K.zig)
+pub const RC_FREQ: u32 = 879_236;
+pub const QUARTZ_FREQ: u32 = 32_768;
+pub const DREAMCAST_FREQ: u32 = 6_000_000;
+
+// Champs runtime sur Cpu (mis à jour par updateClock())
+cpu_freq: u32,                    // fréquence CPU courante en Hz
+fBST_per_cycle_fp: u32,           // Q16: ticks fBST par cycle CPU
+dreamcast_connected: bool,        // true = Dreamcast, false = standalone
 ```
 
-**Chaque tick du quartz (fBST) correspond à environ 183 cycles CPU.** C'est ce rapport qui
-permet au Base Timer de compter correctement alors qu'il est cadencé par l'horloge CPU.
+**Le rapport fBST/CPU est maintenant calculé en fixed-point Q16** pour gérer
+les cas où le CPU est plus lent que le base timer (standalone quartz).
+L'accumulateur du base timer (`base_timer_acc`) utilise ce rapport pour
+convertir les cycles CPU en ticks fBST.
 
 ### 6.3 Le Timer 0 (mode 0 et mode 2)
 

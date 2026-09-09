@@ -166,7 +166,7 @@ pub fn installGame(cpu: *Cpu, game_size: usize) void {
 
     // Set up FAT chain for game blocks (block 0 → 1 → 2 → ... → FAT_LastInFile)
     const fat_base: usize = 254 * 512;
-    const last_game_block: u16 = if (game_size > 0 and game_size >= 2 * 512) @intCast((game_size + 511) / 512 - 1);
+    const last_game_block: u16 = if (game_size > 0 and game_size >= 2 * 512) @intCast((game_size + 511) / 512 - 1) else 0;
     {
         var b: u16 = 0;
         while (b <= last_game_block) : (b += 1) {
