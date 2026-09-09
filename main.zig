@@ -308,22 +308,8 @@ fn updateButtons(cpu: *Cpu) void {
     // MODE is a single valid edge pulse during BIOS launch
     const force_bios_mode_int = bios_launch_window and mode_key_pressed;
 
-    if (p30int) {
-        if (p32int) {
-            // Mode continu : P31INT posé tant qu'un bouton est appuyé
-            if (any_pressed) {
-                p3int |= Cpu.P3INT_P31INT;
-            } else {
-                p3int &= ~Cpu.P3INT_P31INT;
-            }
-        } else {
-            // Mode edge : P31INT posé sur front descendant (appui), pas d'effacement auto.
-            const any_just_pressed = (prev_buttons & ~buttons) != 0;
-            if (any_just_pressed or force_bios_mode_int) {
-                p3int |= Cpu.P3INT_P31INT;
-            }
-            // P31INT est effacé par l'ISR (lc86K.zig:389) ou par écriture logicielle.
-        }
+    if (p30int and ((p32int and any_pressed) or force_bios_mode_int)) {
+        p3int |= Cpu.P3INT_P31INT; // set P31INT source flag only for a valid BIOS launch edge
     } else {
         p3int &= ~Cpu.P3INT_P31INT;
     }
