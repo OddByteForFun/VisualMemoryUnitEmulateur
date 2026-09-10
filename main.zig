@@ -296,7 +296,6 @@ fn updateButtons(cpu: *Cpu) void {
     }
     if (!bios_launch_window and cpu.inst_bank.bank_id == .rom and rl.isKeyDown(.n)) buttons &= ~@as(u8, 0x80); // P3.7 = Sleep only in BIOS
 
-    cpu.prev_p3_buttons = prev_buttons;
     cpu.p3_buttons = buttons;
     cpu.ram_bank0[0x70] = buttons;
 
@@ -306,14 +305,32 @@ fn updateButtons(cpu: *Cpu) void {
     const p30int = p3int & Cpu.P3INT_P30INT != 0; // P30INT: enable interrupt
     const p32int = p3int & Cpu.P3INT_P32INT != 0; // P32INT: 1=continuous, 0=edge
     const any_pressed = buttons != 0xFF;
+    const any_just_pressed = (prev_buttons & buttons) != prev_buttons; // fronts montants (0→1 = appui)
     // MODE is a single valid edge pulse during BIOS launch
     const force_bios_mode_int = bios_launch_window and mode_key_pressed;
 
-    if (p30int and ((p32int and any_pressed) or force_bios_mode_int)) {
-        p3int |= Cpu.P3INT_P31INT; // set P31INT source flag only for a valid BIOS launch edge
+    if (p30int) {
+        if (p32int) {
+            // Mode continu : P31INT posé tant qu'un bouton est appuyé
+            if (any_pressed) {
+                p3int |= Cpu.P3INT_P31INT;
+            } else {
+                p3int &= ~Cpu.P3INT_P31INT;
+            }
+        } else {
+            // Mode edge : P31INT posé sur front montant (appui), pas d'effacement auto.
+            if (any_just_pressed or force_bios_mode_int) {
+                p3int |= Cpu.P3INT_P31INT;
+            }
+            // P31INT est effacé par l'ISR (lc86K.zig) ou par écriture logicielle.
+        }
     } else {
         p3int &= ~Cpu.P3INT_P31INT;
     }
+
+    // prev_p3_buttons must be set AFTER edge detection so the next frame
+    // can compare against the previous physical button state.
+    cpu.prev_p3_buttons = prev_buttons;
 
     cpu.sfr_raw[Cpu.SFR_P3INT] = p3int;
     if (buttons == 0xFF) {
