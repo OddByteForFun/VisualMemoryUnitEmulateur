@@ -1,5 +1,6 @@
 const std = @import("std");
 const Cpu = @import("lc86K").Cpu;
+const cpu_mod = @import("lc86K");
 const dbg = @import("debug");
 const decode = @import("decode");
 const step = decode.step;
@@ -33,6 +34,10 @@ pub fn main(init: std.process.Init) !void {
             // BIOS menu mode flag (kept for CLI compatibility)
         } else if (std.mem.eql(u8, arg, "--standalone")) {
             standalone_mode = true;
+        } else if (std.mem.eql(u8, arg, "--trace")) {
+            dbg.log_level = .trace;
+            cpu_mod.storeSFRTrace = true;
+            cpu_mod.p3ReadTrace = true;
         } else if (path_a == null) {
             path_a = arg;
         } else if (path_b == null) {
@@ -161,6 +166,25 @@ pub fn main(init: std.process.Init) !void {
             start_pulse_frames = 0;
         }
 
+        // Rapport périodique (1/s) : état clé pour le diagnostic runtime
+        if (frames % 60 == 0) {
+            var ph: []const u8 = "none";
+            if (cpu.bios_phase != .none) ph = @tagName(cpu.bios_phase);
+            std.debug.print("T+{d}s PC={X:0>4} OCR={X:0>2} BTCR={X:0>2} P3={X:0>2} P3I={X:0>2} IE={X:0>2} f={d}Hz phase={s} halted={} depth={d}\n", .{
+                frames / 60,
+                cpu.pc,
+                cpu.sfr_raw[Cpu.SFR_OCR],
+                cpu.sfr_raw[Cpu.SFR_BTCR],
+                cpu.p3_buttons,
+                cpu.sfr_raw[Cpu.SFR_P3INT],
+                cpu.sfr_raw[Cpu.SFR_IE],
+                cpu.cpu_freq,
+                ph,
+                cpu.halted,
+                cpu.interrupt_depth,
+            });
+        }
+
         rl.beginDrawing();
         rl.clearBackground(BG);
         
@@ -193,7 +217,7 @@ pub fn main(init: std.process.Init) !void {
                 .none => "none",
             };
         }
-        const status = std.fmt.bufPrintZ(&buf, "PC=0x{X:0>4} OCR={X:0>2} f={d}Hz phase={s} xram={d}", .{ cpu.pc, cpu.sfr_raw[Cpu.SFR_OCR], cpu.cpu_freq, phase_str, cpu.xram_write_count }) catch "??";
+        const status = std.fmt.bufPrintZ(&buf, "PC=0x{X:0>4} OCR={X:0>2} BTCR={X:0>2} P3={X:0>2} P3I={X:0>2} f={d}Hz {s}", .{ cpu.pc, cpu.sfr_raw[Cpu.SFR_OCR], cpu.sfr_raw[Cpu.SFR_BTCR], cpu.p3_buttons, cpu.sfr_raw[Cpu.SFR_P3INT], cpu.cpu_freq, phase_str }) catch "??";
         rl.drawText(status, 4, win_h - 18, 14, rl.Color.white);
 
         rl.endDrawing();
@@ -304,7 +328,7 @@ fn updateButtons(cpu: *Cpu) void {
 
     // Log des changements de boutons pour debug
     if (buttons != prev_buttons) {
-        dbg.log("P3 buttons: 0x{X:0>2} -> 0x{X:0>2} (prev=0x{X:0>2}) bios={s} p3int=0x{X:0>2}", .{
+        std.debug.print("P3 buttons: 0x{X:0>2} -> 0x{X:0>2} (prev=0x{X:0>2}) bios={s} p3int=0x{X:0>2}\n", .{
             prev_buttons, buttons, prev_buttons,
             if (bios_launch_window) "YES" else "no",
             cpu.sfr_raw[Cpu.SFR_P3INT],

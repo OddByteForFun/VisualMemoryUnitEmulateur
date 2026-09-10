@@ -163,7 +163,7 @@ pub fn step(cpu: *Cpu) u8 {
             const addr = readEA(cpu, dec);
             cpu.a = cpu.load8(addr);
             if (addr == 0x14C and cpu.p3_buttons != 0xFF and dbg.log_level == .trace) {
-                dbg.log("LD P3 -> {X:0>2} (PC={X:0>4})", .{ cpu.p3_buttons, cpu.pc - 2 });
+                std.debug.print("LD P3 = {X:0>2} (PC={X:0>4})\n", .{ cpu.p3_buttons, cpu.pc - 2 });
             }
         },
         .ld_ri => {

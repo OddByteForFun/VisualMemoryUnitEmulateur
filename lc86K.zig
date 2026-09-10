@@ -1,6 +1,8 @@
 const std = @import("std");
 
 pub var flashTrace: bool = false;
+pub var storeSFRTrace: bool = false;
+pub var p3ReadTrace: bool = false;
 
 pub const Psw = packed struct(u8) {
     p: bool = false, // bit 0 — Parity (odd parity of ACC, read-only)
@@ -516,6 +518,9 @@ pub const Cpu = struct {
             SFR_T1H => self.t1h_counter,
             SFR_P3 => {
                 self.p3_read_count += 1;
+                if (p3ReadTrace and self.p3_buttons != 0xFF) {
+                    std.debug.print("RD P3={X:0>2} @PC={X:0>4}\n", .{ self.p3_buttons, self.pc });
+                }
                 return self.p3_buttons;
             },
             SFR_P7 => {
@@ -573,7 +578,11 @@ pub const Cpu = struct {
                     self.halted = true;
                 }
             },
-            SFR_P3INT => {},
+            SFR_P3INT => {
+                if (storeSFRTrace) {
+                    std.debug.print("ST P3INT={X:0>2} @PC={X:0>4}\n", .{ val, self.pc });
+                }
+            },
             SFR_T0CNT => {
                 if (val & T0CNT_T0LRUN == 0) {
                     self.t0l_counter = self.sfr_raw[SFR_T0LR];
@@ -613,6 +622,9 @@ pub const Cpu = struct {
                 }
             },
             SFR_BTCR => {
+                if (storeSFRTrace) {
+                    std.debug.print("ST BTCR={X:0>2} @PC={X:0>4}\n", .{ val, self.pc });
+                }
                 if (val & BTCR_BT_RUN == 0) {
                     self.base_timer_counter = 0;
                     self.base_timer_acc = 0;
@@ -649,6 +661,9 @@ pub const Cpu = struct {
             SFR_OCR => {
                 // OCR : recalcule l'horloge CPU (VMU.txt:15257-15342)
                 self.updateClock();
+                if (storeSFRTrace) {
+                    std.debug.print("ST OCR={X:0>2} @PC={X:0>4} (f={d}Hz)\n", .{ val, self.pc, self.cpu_freq });
+                }
             },
 
             else => {},
