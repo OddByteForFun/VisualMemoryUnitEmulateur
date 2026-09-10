@@ -364,6 +364,9 @@ pub fn step(cpu: *Cpu) u8 {
             const lo = cpu.ram_bank0[cpu.sp];
             cpu.sp -%= 1;
             cpu.pc = (@as(u16, hi) << 8) | @as(u16, lo);
+            // Restaurer le bank d'instructions pré-interruption (sauvegardé par servicePendingInterrupt)
+            cpu.pending_ext = cpu.saved_pending_ext;
+            cpu.syncInstructionBank();
             if (dbg.log_level == .trace) {
                 dbg.log("RETI -> PC={X:0>4} depth_before={d}", .{ cpu.pc, cpu.interrupt_depth });
             }

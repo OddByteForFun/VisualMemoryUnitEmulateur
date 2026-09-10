@@ -87,6 +87,7 @@ pub const Cpu = struct {
     interrupt_depth: u8 = 0, // verifier sur une IRQ est possible (0, ok, 1 attente RETI)
     interrupt_blocked: u8 = 0,
     process_this_instr: bool = true, // libevmu processThisInstr: skip PIC dispatch 1 instr after RETI
+    saved_pending_ext: u8 = 0x80, // saved pending_ext before interrupt dispatch (for bank restore on RETI)
 
     // Ports I/O
     p3_buttons: u8 = 0xFF, // état physique des boutons (active-low, 1=relâché)
@@ -374,6 +375,10 @@ pub const Cpu = struct {
         self.ram_bank0[self.sp] = @truncate(return_addr & 0xFF);
         self.sp +%= 1;
         self.ram_bank0[self.sp] = @truncate(return_addr >> 8);
+        // Sur le vrai LC86000, les vecteurs d'interruption (0x0000-0x00FF) sont toujours en ROM.
+        // Sauvegarder le bank courant et basculer en ROM pour l'ISR.
+        self.saved_pending_ext = self.pending_ext;
+        self.setInstructionBank(.rom);
         self.pc = vecteur;
         self.interrupt_depth = 1;
         self.halted = false;

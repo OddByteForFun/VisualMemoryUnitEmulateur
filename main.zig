@@ -261,7 +261,10 @@ fn updateButtons(cpu: *Cpu) void {
     const mode_key_pressed = rl.isKeyPressed(.m);
     const title_start_pressed = rl.isKeyPressed(.enter) or rl.isKeyPressed(.space);
     if (bios_launch_window) {
-        buttons = 0xFF;
+        // Menu BIOS : navigation (Up/Down) + sélection (A) + MODE
+        if (rl.isKeyDown(.up) or rl.isKeyDown(.w)) buttons &= ~@as(u8, 0x01); // Up
+        if (rl.isKeyDown(.down) or rl.isKeyDown(.s)) buttons &= ~@as(u8, 0x02); // Down
+        if (rl.isKeyDown(.z) or rl.isKeyDown(.k)) buttons &= ~@as(u8, 0x10); // A
         if (mode_key_pressed) {
             buttons &= ~@as(u8, 0x40); // P3.6 = MODE button
         }
@@ -298,6 +301,15 @@ fn updateButtons(cpu: *Cpu) void {
 
     cpu.p3_buttons = buttons;
     cpu.ram_bank0[0x70] = buttons;
+
+    // Log des changements de boutons pour debug
+    if (buttons != prev_buttons) {
+        dbg.log("P3 buttons: 0x{X:0>2} -> 0x{X:0>2} (prev=0x{X:0>2}) bios={s} p3int=0x{X:0>2}", .{
+            prev_buttons, buttons, prev_buttons,
+            if (bios_launch_window) "YES" else "no",
+            cpu.sfr_raw[Cpu.SFR_P3INT],
+        });
+    }
 
     // Match the BIOS harness: during the launch menu, a held MODE state must assert
     // P31INT directly so the ROM launch wrapper can continue.
