@@ -193,7 +193,7 @@ pub fn main(init: std.process.Init) !void {
                 .none => "none",
             };
         }
-        const status = std.fmt.bufPrintZ(&buf, "PC=0x{X:0>4} ext={X:0>2} phase={s} xram_wr={d}", .{ cpu.pc, cpu.pending_ext, phase_str, cpu.xram_write_count }) catch "??";
+        const status = std.fmt.bufPrintZ(&buf, "PC=0x{X:0>4} OCR={X:0>2} f={d}Hz phase={s} xram={d}", .{ cpu.pc, cpu.sfr_raw[Cpu.SFR_OCR], cpu.cpu_freq, phase_str, cpu.xram_write_count }) catch "??";
         rl.drawText(status, 4, win_h - 18, 14, rl.Color.white);
 
         rl.endDrawing();

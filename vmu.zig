@@ -213,7 +213,9 @@ pub fn initBiosRtc(cpu: *Cpu, bios_menu_mode: bool) void {
     cpu.sfr_raw[Cpu.SFR_PCON] = 0x00; // PCON: disable HALT/HOLD
     cpu.sfr_raw[Cpu.SFR_IE] = 0xFF; // IE: all interrupts enabled (EA=1 + all individual)
     cpu.sfr_raw[Cpu.SFR_IP] = 0x00; // IP: no priority (default)
-    cpu.sfr_raw[Cpu.SFR_OCR] = 0xA3; // OCR: quartz selected (10), RC stopped (1), CF stopped (1), /6 (1)
+    // OCR: en standalone, démarrer en RC/12 (~73kHz) comme le vrai VMU.
+    // En Dreamcast, l'horloge externe 6MHz prime, donc OCR n'a pas d'impact.
+    cpu.sfr_raw[Cpu.SFR_OCR] = if (cpu.dreamcast_connected) 0xA3 else 0x03;
     cpu.sfr_raw[Cpu.SFR_MCR] = 0x08; // MCR: LCD update enable (bit3)
     cpu.sfr_raw[Cpu.SFR_VCCR] = 0x80; // VCCR: LCD on (bit7)
     cpu.sfr_raw[Cpu.SFR_P1DDR] = 0xFF; // P1DDR: all output
