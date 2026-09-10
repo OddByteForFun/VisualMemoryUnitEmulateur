@@ -260,34 +260,57 @@ pub const Cpu = struct {
 
     // ── Horloge dynamique (OCR) ──────────────────────────────────────
     // VMU.txt:5098-5021 : deux oscillateurs internes + clock externe Dreamcast.
-    // OCR7=1→/6, OCR7=0→/12. OCR5:4=00→RC, 10→Quartz.
+    // OCR7=1→/6, OCR7=0→/12. OCR5:4=00→RC, 01→CF(6MHz), 10→Quartz.
 
-    /// Fréquences des oscillateurs internes (VMU.txt:15103-15108)
+    /// Fréquences des oscillateurs (VMU.txt:15103-15108)
     pub const RC_FREQ: u32 = 879_236; // oscillateur RC ~879 kHz
+    pub const CF_FREQ: u32 = 6_000_000; // oscillateur CF (ceramic/ferrite) = clock Dreamcast
     pub const QUARTZ_FREQ: u32 = 32_768; // oscillateur quartz 32,768 Hz
-    pub const DREAMCAST_FREQ: u32 = 6_000_000; // clock externe Maple bus
 
-    /// Recalcule cpu_freq et fBST_per_cycle_fp à partir du registre OCR.
-    /// En mode Dreamcast, la fréquence est toujours 6 MHz (clock externe).
+    // Isl (Timer Input Select) — VMD-133/VMD-138
+    // bits 5:4 = sélection horloge base timer :
+    //   00/10 = Quartz (32768 Hz), 01 = Cycle clock (CPU), 11 = T0 prescaler
+    pub const ISL_BT_CLK_MASK: u8 = 0x30; // bits 5:4
+    pub const ISL_BT_CLK_QUARTZ: u8 = 0x00; // Quartz oscillator (X=0)
+    pub const ISL_BT_CLK_CPU: u8 = 0x10; // Cycle clock (01)
+    pub const ISL_BT_CLK_T0: u8 = 0x30; // T0 prescaler (11)
+
+    /// Retourne la fréquence d'horloge du base timer selon le registre Isl.
+    pub fn baseTimerClockHz(self: *Cpu) u32 {
+        const isl = self.sfr_raw[SFR_ISL];
+        const sel: u2 = @truncate((isl & ISL_BT_CLK_MASK) >> 4);
+        return switch (sel) {
+            ISL_BT_CLK_QUARTZ >> 4, 0b10 => QUARTZ_FREQ, // Quartz oscillator (bit5=X, bit4=0)
+            ISL_BT_CLK_CPU >> 4 => self.cpu_freq, // Cycle clock (01) → fréquence CPU courante
+            ISL_BT_CLK_T0 >> 4 => QUARTZ_FREQ, // T0 prescaler → fallback Quartz (non implémenté)
+        };
+    }
+
+    /// Recalcule cpu_freq et fBST_per_cycle_fp à partir des registres OCR et Isl.
     pub fn updateClock(self: *Cpu) void {
         if (self.dreamcast_connected) {
-            self.cpu_freq = DREAMCAST_FREQ;
+            self.cpu_freq = CF_FREQ;
         } else {
             const ocr = self.sfr_raw[SFR_OCR];
             // OCR5:4 = source d'horloge système
             const src: u2 = @truncate((ocr & 0x30) >> 4);
             const base_freq: u32 = switch (src) {
                 0b00 => RC_FREQ, // RC oscillator
+                0b01 => CF_FREQ, // CF oscillator (ceramic/ferrite) = 6 MHz
                 0b10 => QUARTZ_FREQ, // Quartz oscillator
-                else => self.cpu_freq, // état prohibé : garder la fréquence courante
+                0b11 => self.cpu_freq, // état prohibé : garder la fréquence courante
             };
             // OCR7 = diviseur : 0→/12, 1→/6
             const div: u32 = if (ocr & 0x80 != 0) 6 else 12;
             self.cpu_freq = base_freq / div;
         }
-        // Fixed-point Q16 : ticks fBST par cycle CPU = FST_FREQ / cpu_freq
-        // Au maximum 1 tick par cycle (quartz /12 = 2731 Hz → 32768/2731 ≈ 12)
-        self.fBST_per_cycle_fp = (FST_FREQ << 16) / self.cpu_freq;
+        self.updateBaseTimerClock();
+    }
+
+    /// Recalcule le cache fBST_per_cycle_fp selon l'horloge Isl.
+    pub fn updateBaseTimerClock(self: *Cpu) void {
+        const bst_hz = self.baseTimerClockHz();
+        self.fBST_per_cycle_fp = (bst_hz << 16) / self.cpu_freq;
     }
 
     // Gestion des interruptions — vérification des flags posés par les timers
@@ -303,11 +326,15 @@ pub const Cpu = struct {
     };
 
     pub fn requestLevelDrivenInterrupts(self: *Cpu) void {
-        // P31INT is set once-per-frame by updateButtons() in main.zig.
-        // This matches DreamPotato's button sampling (once per frame at ~60Hz)
-        // rather than libevmu's per-instruction poll, which would re-fire the P3
-        // interrupt on every instruction while a button is held and starve the
-        // main loop (HOLD lockup).
+        // DreamPotato appelle requestLevelDrivenInterrupts() à chaque instruction.
+        // En mode continu (P32INT=1): pose P31INT tant qu'un bouton P3 est appuyé.
+        // En mode edge (P32INT=0): détecte les fronts descendants (bouton appuyé).
+        // Le problème : en mode continu, quand la boucle du jeu écrit P3INT=FD
+        // (P31INT=0), requestLevelDrivenInterrupts repose P31INT immédiatement,
+        // et servicePendingInterrupt le clear → cycle set/dispatch/clear infini = flood.
+        // DreamPotato n'a pas ce problème car ils ne CLEAR PAS P31INT au dispatch.
+        // Pour l'instant, on garde le comportement éprouvé : P31INT est alimenté
+        // une fois par frame dans updateButtons(), pas à chaque instruction.
         _ = self;
     }
 
@@ -663,6 +690,14 @@ pub const Cpu = struct {
                 self.updateClock();
                 if (storeSFRTrace) {
                     std.debug.print("ST OCR={X:0>2} @PC={X:0>4} (f={d}Hz)\n", .{ val, self.pc, self.cpu_freq });
+                }
+            },
+            SFR_ISL => {
+                // Isl : sélection entrée externe et horloge base timer (VMD-133)
+                // bits 5:4 = 00/10 → Quartz, 01 → CycleClock (CPU), 11 → T0 prescaler
+                self.updateBaseTimerClock();
+                if (storeSFRTrace) {
+                    std.debug.print("ST ISL={X:0>2} @PC={X:0>4}\n", .{ val, self.pc });
                 }
             },
 

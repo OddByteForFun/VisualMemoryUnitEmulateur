@@ -138,8 +138,8 @@ pub fn tickBaseTimer(self: *Cpu, cycles_used: u8) void {
     // BTCR6 (bit 6) = 0 → base timer arrêté, counter clear
     if (btcr & Cpu.BTCR_BT_RUN == 0) return;
 
-    // Fixed-point Q16 : chaque cycle CPU accumule fBST_per_cycle_fp ticks fBST
-    // Gère aussi bien CPU > fBST (Dreamcast) que CPU < fBST (standalone quartz)
+    // Fixed-point Q16 : chaque cycle CPU accumule fBST_per_cycle_fp ticks base timer
+    // Cache recalculé par updateBaseTimerClock() quand OCR ou Isl change
     self.base_timer_acc +%= @as(u32, self.fBST_per_cycle_fp) * cycles_used;
     while (self.base_timer_acc >= 0x10000) {
         self.base_timer_acc -= 0x10000;
