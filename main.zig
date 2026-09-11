@@ -25,7 +25,9 @@ pub fn main(init: std.process.Init) !void {
 
     var path_a: ?[]const u8 = null;
     var path_b: ?[]const u8 = null;
-    var standalone_mode: bool = false;
+    // Standalone par défaut (comme DreamPotato et le vrai VMU) : l'horloge est
+    // pilotée par l'OCR (quartz ≈ 5 kHz en jeu). --docked force le mode Dreamcast 6 MHz.
+    var standalone_mode: bool = true;
 
     while (arg_iter.next()) |arg| {
         if (std.mem.eql(u8, arg, "--azerty")) {
@@ -34,6 +36,8 @@ pub fn main(init: std.process.Init) !void {
             // BIOS menu mode flag (kept for CLI compatibility)
         } else if (std.mem.eql(u8, arg, "--standalone")) {
             standalone_mode = true;
+        } else if (std.mem.eql(u8, arg, "--docked")) {
+            standalone_mode = false;
         } else if (std.mem.eql(u8, arg, "--trace")) {
             dbg.log_level = .trace;
             cpu_mod.storeSFRTrace = true;
@@ -46,7 +50,7 @@ pub fn main(init: std.process.Init) !void {
     }
 
     _ = path_a orelse {
-        std.debug.print("Usage: lc86K [<bios.bin>] <game.vms> [--azerty] [--bios-menu] [--standalone]\n", .{});
+        std.debug.print("Usage: lc86K [<bios.bin>] <game.vms> [--azerty] [--bios-menu] [--docked]\n", .{});
         return;
     };
 
