@@ -1,95 +1,93 @@
-# Projet
+# LC86000
 
-"Le Dreamcast VMU est une carte mémoire développée par l'entreprise Sega comportant un écran LCD pour pouvoir jouer à des mini-jeux mais aussi voir des animations lors de parties jouées sur Dreamcast. Son nom original est Dreamcast VMS pour Visual Memory System." Source : Wikipedia
+Émulateur du CPU **Sanyo LC86K87** — le processeur 8-bit de la VMU Dreamcast
+(dite VMS), écrite en **Zig 0.16** avec rendu **raylib**.
 
-## Caractéristiques matérielles
+## Caractéristiques matérielles émulées
 
 | Composant | Détail |
 |-----------|--------|
-| CPU | 8-bit Sanyo LC86K87 |
-| Horloge | 6 MHz (céramique) + 32.768 kHz (quartz RTC) |
+| CPU | 8-bit Sanyo LC86K87, ISA complète (70 instructions) |
+| Horloge | 6 MHz externe (Dreamcast) ou RC/quartz temps réel (standalone, pilote par OCR) |
 | RAM | 512B interne banquée (2×256B) + 198B XRAM LCD (2×96 + 6 icônes) |
-| ROM | 16KB BIOS |
-| Flash | 128KB (200 blocs), FAT8 |
-| Affichage | 48×32, monochrome |
-| Son | PWM 1 canal 8-bit |
-| Entrées | D-pad 4 dir. + A, B, MODE, SLEEP |
+| ROM | BIOS (64KB chargé, image boot réelle) |
+| Flash | 128KB (200 blocs), FAT8, filesystem VMS |
+| Affichage | 48×32 monochrome, rendu LCD raylib ×10 + bande icônes |
+| Boutons | P3 active-low : Up/Down/Left/Right, A, B, MODE, Sleep |
 | Timer | 1× Base (14-bit) + 2× Timer 16-bit |
 | Série | Maple (Dreamcast) + synchro 8-bit (VMU-VMU) |
 
-## Référence de comparaison
+## Références de validation
 
-La base de comparaison principale est libevmu : c'est le point de référence le plus utile pour valider le comportement matériel du VMU, en particulier pour :
+- **libevmu** : la base de comparaison historique — filesystem flash/VMS,
+  initialisation BIOS/RTC, logique de lancement jeu, gestion P3/IRQ.
+- **DreamPotato** (émulateur .NET) : référence pour la sémantique du registre
+  **EXT** (bascule de banque d'instructions `Ext0`/`Ext3`) et les valeurs SFR par défaut.
+- **VMU.pdf** : documentation matérielle officielle (datasheet Sega).
 
-- la structure du filesystem flash et du volume VMS,
-- l'initialisation BIOS/RTC au boot,
-- la logique de lancement d'un jeu depuis la ROM BIOS vers la flash,
-- la gestion de P3 (boutons, front, IRQ),
-- les priorités d'interruption et la réactivation après HALT.
+## Utilisation
 
-Le projet essaie de rester proche du comportement réel observé dans libevmu, sans copier aveuglément son code, mais en validant les séquences de boot et les états matériels.
-
-## Documentation
-
-Les références seront effectuées d'après le fichier VMU.pdf et les comportements observés dans libevmu.
-
-### Instructions
-
-Source : [doc/doc_inst.md](doc/doc_inst.md)
-Tableau complet des 70 instructions, état d'avancement par opcode, résumé des tests VMC.
-
-### Timers
-
-Source : [doc/doc_timer.md](doc/doc_timer.md)
-
-## État actuel du projet
-
-### Core CPU / BIOS / Jeu
-- [x] CPU LC86K87 principale et décodage ISA
-- [x] Table ISA structurée et cohérente, avec tests de couverture
-- [x] Implémentation des instructions restantes et validation par tests VMC
-- [x] Boot BIOS + initialisation RTC
-- [x] Filesystem VMU / flash / FAT avec installation d'un jeu dans la flash
-- [x] Transitions de phase BIOS jusqu'au lancement du jeu
-- [x] Bascule d'instruction vers flash0 lors du lancement réel
-- [x] Gestion des boutons P3 avec logique active-low et front d'IRQ
-- [x] Interruption P3, timer, HALT, wake-up et priorités
-- [x] 92/92 tests passés via `zig build test`
-
-### Validation
 ```
-zig build test
-Build Summary: 3/3 steps succeeded; 92/92 tests passed
+zig build run -- <game.vms> [options]
 ```
+
+| Option | Effet |
+|--------|-------|
+| `<bios.bin> <game.vms>` | Fournir un BIOS explicite (sinon `roms/bios/` auto-détecté) |
+| `--standalone` | Mode par défaut : horloge pilote par OCR (quartz), comme DreamPotato |
+| `--docked` | Mode Dreamcast : 6 MHz horloge externe |
+| `--azerty` | Mapping clavier AZERTY (A/B sur Q/Z/X) |
+| `--bios-menu` | Activer le chemin menu BIOS (P7=0x02, non-standalone) |
+| `--trace` | Trace des SFR et lectures P3 sur stderr |
+
+### Contrôles
+
+- **Flèches / WASD** : D-pad
+- **Z/X (QWERTY) ou Q/Z (AZERTY)** : boutons A / B
+- **Entrée / Espace** : Start (pulse sur écran titre)
+- **M** : MODE (menu BIOS)
+- **N** : Sleep (P3.7, en BIOS uniquement)
+
+## État actuel
+
+### Fait
+- [x] CPU LC86K87 : ISA structurée et complète, validée par tests VMC
+- [x] Boot BIOS + RTC + phases jusqu'au lancement du jeu (`bios_game_launch`)
+- [x] Bascule de banque d'instructions via registre **EXT** (modèle `Ext0`/`Ext3`,
+  corrigé et validé sur DreamPotato) — les appels BIOS GHEAD passent bien en ROM
+- [x] Lancement réel du jeu en flash0 (PC=0x0000, banque committée)
+- [x] Filesystem VMU / flash / FAT8 + installation d'un jeu
+- [x] Rendu LCD 48×32 raylib (MCR bit3 + VCCR bit7 gated) + bande icônes
+- [x] Boutons P3 : active-low, fronts, IRQ (bord + continu), menu BIOS
+- [x] Interruptions : P3, timers, HALT/wake-up, priorités, RETI + restauration bank
+- [x] Modes d'horloge OCR / ISL : 6 MHz (docked) vs quartz (standalone)
+- [x] Tests : `zig build test` → **54/54** passent
 
 ## TODO
 
-### P0 — stabilisation du comportement réel
-- [x] Vérifier les phases BIOS jusqu'à `bios_game_launch`
-- [x] Couvrir la logique de lancement réel depuis le BIOS vers flash0
-- [x] Reprendre la référence libevmu pour la sémantique des boutons / IRQ / launch
-- [ ] Valider l'expérience de jeu complète en runtime sur un jeu réel et comparer visuellement au comportement attendu
-- [ ] Vérifier les cas limites de MENU/START/MODE sur BIOS et sur écran titre du jeu
+### P0 — comportement réel
+- [ ] Valider l'expérience de jeu complète sur un titre réel (état : Tetris tourne,
+      les titres GHEAD/BIOS-call démarrent après le correctif EXT)
+- [ ] Cas limites MENU/START/MODE sur BIOS et écran titre
 
-### P1 — périphériques et matériel VMU
-- [ ] I/O Ports P1, P3, P7 — boutons, état connexion, modes d'entrée
-- [ ] Contrôle LCD XBNK, VCCR, MCR, CNR, TDR
-- [x] Contrôle horloge OCR, ISL, division d'horloge — mode Dreamcast (6 MHz) + standalone (RC/Quartz via `--standalone`)
+### P1 — périphériques
+- [ ] I/O Ports P1 / P7 (états connexion, modes d'entrée)
 - [ ] Maple MPLSW, MPLSTA, MPLRST
 - [ ] Série SCON0/1, SBUF0/1, SBR
-- [x] Flash FPR, EXT (bank switching) — guard RC oscillator en standalone
 - [ ] Work RAM VRMAD, VTRBF
-- [x] Power PCON (halt) — wakeup par interrupt et edge P3
 
-### P2 — fonctionnalités de simulation plus avancées
-- [ ] Affichage 48×32 depuis XRAM
+### P2 — simulation avancée
 - [ ] PWM son via Timer 1
-- [ ] Maple Bus (communication Dreamcast)
-- [ ] Filesystem Flash FAT8 (import/export VMS)
-- [ ] Compatibilité plus large avec l'ensemble des ROM/jeux VMU
+- [ ] Filesystem FAT8 — import/export VMS
+- [ ] Compatibilité élargie aux ROM/jeux VMU
 
-### P3 — qualité / maintenance
-- [ ] Nettoyer et documenter les points d'implémentation encore hérités
-- [ ] Ajouter des tests de comparaison sur séquences BIOS/launch libevmu
-- [ ] Ajouter des captures de référence pour les cas les plus sensibles du boot VMU
+### P3 — qualité / entretien
+- [ ] Nettoyer et documenter les points hérités
+- [ ] Tests de comparaison BIOS/launch vs libevmu
+- [ ] Captures de référence pour les boot VMU sensibles
 
+## Documentation
+
+- [doc/doc_inst.md](doc/doc_inst.md) — tableau ISA, avancement par opcode, tests VMC
+- [doc/doc_timer.md](doc/doc_timer.md) — comportement des timers
+- [doc/guide_technique.md](doc/guide_technique.md) — architecture et notes techniques
