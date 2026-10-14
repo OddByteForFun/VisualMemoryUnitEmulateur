@@ -1243,3 +1243,178 @@ test "BIOS menu launches game when Button A pressed on clock screen" {
     try testing.expect(cpu.bios_phase_seen[@intFromEnum(Cpu.BiosPhase.bios_game_launch)] or cpu.inst_bank.bank_id == .flash0);
 }
 
+test "BIOS menu mode cycling and selection" {
+    const bios_bytes = @embedFile("roms/bios/vmu_bios_jp.bin");
+    const game_bytes = @embedFile("roms/Metroid.vms");
+    var rom: [65536]u8 = undefined;
+    var cpu = makeCpu(&rom);
+    @memcpy(&rom, bios_bytes);
+    vmu.initVmuFlash(&cpu);
+    const info = vmu.parseVms(game_bytes, null);
+    vmu.installVms(&cpu, info, game_bytes);
+    cpu.p3_buttons = 0xFF;
+    vmu.initBiosRtc(&cpu, true, false);
+
+    const cycles_per_frame: u64 = cpu.cpu_freq / 60;
+    var frames: usize = 0;
+    // Laisser le BIOS démarrer jusqu'à la boucle principale (mode 0)
+    while (frames < 30) : (frames += 1) {
+        var i: u64 = 0;
+        while (i < cycles_per_frame) : (i += 1) {
+            _ = step(&cpu);
+            _ = dbg.checkBiosPhase(&cpu);
+            if (cpu.halted) {
+                const remaining: u32 = @intCast(cycles_per_frame - i);
+                var ticked: u32 = 0;
+                while (ticked < remaining) {
+                    const batch: u8 = @intCast(@min(remaining - ticked, 255));
+                    cpu.tickTimers(batch);
+                    ticked += batch;
+                    cpu.requestLevelDrivenInterrupts();
+                    cpu.servicePendingInterrupt();
+                    if (!cpu.halted) break;
+                }
+                break;
+            }
+        }
+    }
+
+    try testing.expectEqual(@as(u8, 0), cpu.ram_bank0[0x30]); // Mode 0 initial
+
+    // Appuyer sur MODE (P3.6)
+    cpu.p3_buttons = 0xFF & ~@as(u8, 0x40);
+    cpu.sfr_raw[Cpu.SFR_P3INT] |= Cpu.P3INT_P31INT;
+
+    while (frames < 45) : (frames += 1) {
+        var i: u64 = 0;
+        while (i < cycles_per_frame) : (i += 1) {
+            _ = step(&cpu);
+            _ = dbg.checkBiosPhase(&cpu);
+            if (cpu.halted) {
+                const remaining: u32 = @intCast(cycles_per_frame - i);
+                var ticked: u32 = 0;
+                while (ticked < remaining) {
+                    const batch: u8 = @intCast(@min(remaining - ticked, 255));
+                    cpu.tickTimers(batch);
+                    ticked += batch;
+                    cpu.requestLevelDrivenInterrupts();
+                    cpu.servicePendingInterrupt();
+                    if (!cpu.halted) break;
+                }
+                break;
+            }
+        }
+    }
+
+    // Le mode doit être passé à 1, et l'icône GAME doit être activée (Bank 2, byte 2 = 0x10)
+    try testing.expectEqual(@as(u8, 1), cpu.ram_bank0[0x30]);
+    try testing.expectEqual(@as(u8, 0x10), cpu.xram_banks.bank2[2]);
+
+    // Relâcher MODE pendant 10 frames
+    cpu.p3_buttons = 0xFF;
+    cpu.ram_bank0[0x72] = cpu.ram_bank0[0x70];
+    cpu.ram_bank0[0x70] = 0x00;
+    cpu.sfr_raw[Cpu.SFR_P3INT] &= ~Cpu.P3INT_P31INT;
+
+    while (frames < 55) : (frames += 1) {
+        var i: u64 = 0;
+        while (i < cycles_per_frame) : (i += 1) {
+            _ = step(&cpu);
+            if (cpu.halted) {
+                const remaining: u32 = @intCast(cycles_per_frame - i);
+                var ticked: u32 = 0;
+                while (ticked < remaining) {
+                    const batch: u8 = @intCast(@min(remaining - ticked, 255));
+                    cpu.tickTimers(batch);
+                    ticked += batch;
+                    cpu.requestLevelDrivenInterrupts();
+                    cpu.servicePendingInterrupt();
+                    if (!cpu.halted) break;
+                }
+                break;
+            }
+        }
+    }
+
+    // Appuyer à nouveau sur MODE (P3.6) pour passer au mode 2
+    cpu.p3_buttons = 0xFF & ~@as(u8, 0x40);
+    cpu.sfr_raw[Cpu.SFR_P3INT] |= Cpu.P3INT_P31INT;
+
+    while (frames < 70) : (frames += 1) {
+        var i: u64 = 0;
+        while (i < cycles_per_frame) : (i += 1) {
+            _ = step(&cpu);
+            if (cpu.halted) {
+                const remaining: u32 = @intCast(cycles_per_frame - i);
+                var ticked: u32 = 0;
+                while (ticked < remaining) {
+                    const batch: u8 = @intCast(@min(remaining - ticked, 255));
+                    cpu.tickTimers(batch);
+                    ticked += batch;
+                    cpu.requestLevelDrivenInterrupts();
+                    cpu.servicePendingInterrupt();
+                    if (!cpu.halted) break;
+                }
+                break;
+            }
+        }
+    }
+
+    // Le mode doit être passé à 2, et l'icône CLOCK doit être activée (Bank 2, byte 3 = 0x04)
+    try testing.expectEqual(@as(u8, 2), cpu.ram_bank0[0x30]);
+    try testing.expectEqual(@as(u8, 0x04), cpu.xram_banks.bank2[3]);
+
+    // Relâcher MODE
+    cpu.p3_buttons = 0xFF;
+    cpu.ram_bank0[0x72] = cpu.ram_bank0[0x70];
+    cpu.ram_bank0[0x70] = 0x00;
+    cpu.sfr_raw[Cpu.SFR_P3INT] &= ~Cpu.P3INT_P31INT;
+
+    while (frames < 80) : (frames += 1) {
+        var i: u64 = 0;
+        while (i < cycles_per_frame) : (i += 1) {
+            _ = step(&cpu);
+            if (cpu.halted) {
+                const remaining: u32 = @intCast(cycles_per_frame - i);
+                var ticked: u32 = 0;
+                while (ticked < remaining) {
+                    const batch: u8 = @intCast(@min(remaining - ticked, 255));
+                    cpu.tickTimers(batch);
+                    ticked += batch;
+                    cpu.requestLevelDrivenInterrupts();
+                    cpu.servicePendingInterrupt();
+                    if (!cpu.halted) break;
+                }
+                break;
+            }
+        }
+    }
+
+    // Appuyer à nouveau sur MODE (P3.6) pour revenir au mode 0
+    cpu.p3_buttons = 0xFF & ~@as(u8, 0x40);
+    cpu.sfr_raw[Cpu.SFR_P3INT] |= Cpu.P3INT_P31INT;
+
+    while (frames < 95) : (frames += 1) {
+        var i: u64 = 0;
+        while (i < cycles_per_frame) : (i += 1) {
+            _ = step(&cpu);
+            if (cpu.halted) {
+                const remaining: u32 = @intCast(cycles_per_frame - i);
+                var ticked: u32 = 0;
+                while (ticked < remaining) {
+                    const batch: u8 = @intCast(@min(remaining - ticked, 255));
+                    cpu.tickTimers(batch);
+                    ticked += batch;
+                    cpu.requestLevelDrivenInterrupts();
+                    cpu.servicePendingInterrupt();
+                    if (!cpu.halted) break;
+                }
+                break;
+            }
+        }
+    }
+
+    // Le mode doit être revenu à 0
+    try testing.expectEqual(@as(u8, 0), cpu.ram_bank0[0x30]);
+}
+

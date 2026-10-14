@@ -141,7 +141,7 @@ pub fn main(init: std.process.Init) !void {
     }
 
     const win_w: i32 = LCD_W * SCALE;
-    const win_h: i32 = LCD_H * SCALE + 24 + SCALE + 8;
+    const win_h: i32 = LCD_H * SCALE + 34 + 56;
     rl.initWindow(win_w, win_h, "LC86K VMU Emulator");
     defer rl.closeWindow();
     rl.setTargetFPS(60);
@@ -256,8 +256,28 @@ pub fn main(init: std.process.Init) !void {
         if (mcr & 0x08 != 0 and vccr & 0x80 != 0) {
             renderLcd(&cpu);
         }
-        
-        // Display debug info overlay with BIOS context
+
+        // Séparateur fin entre l'écran matriciel 48x32 et les icônes matérielles
+        rl.drawLine(0, LCD_H * SCALE, win_w, LCD_H * SCALE, rl.Color.init(150, 170, 140, 255));
+
+        // Rendu des 4 icônes matérielles du VMU (FILE, GAME, CLOCK, FLASH)
+        renderIcons(&cpu, LCD_H * SCALE + 6, win_w);
+
+        // Panneau inférieur d'aide et statut
+        const panel_y = LCD_H * SCALE + 34;
+        rl.drawRectangle(0, panel_y, win_w, win_h - panel_y, rl.Color.init(26, 30, 26, 255));
+
+        // Ligne 1 : Contrôles principaux
+        const is_bios = cpu.inst_bank.bank_id == .rom;
+        if (is_bios) {
+            rl.drawText("MODE [Tab/M]: changer  |  A [Entree/K]: valider  |  B [B/X]: retour", 10, panel_y + 6, 12, rl.Color.init(220, 235, 215, 255));
+            rl.drawText("D-Pad [Fleches/ZQSD]  |  Reset BIOS [Echap/F1]", 10, panel_y + 22, 12, rl.Color.init(175, 190, 170, 255));
+        } else {
+            rl.drawText("JEU: D-Pad [Fleches/ZQSD]  |  A [Entree/K]  |  B [B/X]", 10, panel_y + 6, 12, rl.Color.init(220, 235, 215, 255));
+            rl.drawText("Reset BIOS [Echap/F1]", 10, panel_y + 22, 12, rl.Color.init(175, 190, 170, 255));
+        }
+
+        // Ligne 3 : Informations debug
         var buf: [256]u8 = undefined;
         var phase_str: []const u8 = "none";
         if (cpu.bios_phase != .none) {
@@ -269,8 +289,8 @@ pub fn main(init: std.process.Init) !void {
                 .bios_lcd_setup => "lcd_setup",
                 .bios_date_ok => "date_ok",
                 .bios_main_loop => "main_loop",
-                .bios_mode_0 => "mode_0 [Fichiers]",
-                .bios_mode_1 => "mode_1 [Jeu]",
+                .bios_mode_0 => "mode_0 [Veille/Jeu]",
+                .bios_mode_1 => "mode_1 [Fichiers]",
                 .bios_mode_2 => "mode_2 [Horloge]",
                 .bios_game_launch => "game_launch",
                 .bios_no_game => "no_game",
@@ -278,13 +298,61 @@ pub fn main(init: std.process.Init) !void {
                 .none => "none",
             };
         }
-        const status = std.fmt.bufPrintZ(&buf, "PC=0x{X:0>4} OCR={X:0>2} BTCR={X:0>2} P3={X:0>2} P3I={X:0>2} f={d}Hz {s}", .{ cpu.pc, cpu.sfr_raw[Cpu.SFR_OCR], cpu.sfr_raw[Cpu.SFR_BTCR], cpu.p3_buttons, cpu.sfr_raw[Cpu.SFR_P3INT], cpu.cpu_freq, phase_str }) catch "??";
-        rl.drawText(status, 4, win_h - 18, 14, rl.Color.white);
+        const bnk_str = if (cpu.inst_bank.bank_id == .rom) "ROM" else "FLASH";
+        const status = std.fmt.bufPrintZ(&buf, "PC=0x{X:0>4} P3=0x{X:0>2} [{s}] {s}", .{ cpu.pc, cpu.p3_buttons, bnk_str, phase_str }) catch "??";
+        rl.drawText(status, 10, panel_y + 38, 11, rl.Color.init(130, 145, 125, 255));
 
         rl.endDrawing();
         buzzer.update(&cpu);
         frames += 1;
 
+    }
+}
+
+fn renderIcons(cpu: *Cpu, y_start: i32, screen_w: i32) void {
+    // Les 4 icônes du bandeau LCD physique du VMU (XRAM Banque 2) :
+    // - FILE  (Fichier)  : Banque 2, octet 1, bit 6 (0x40)
+    // - GAME  (Jeu)      : Banque 2, octet 2, bit 4 (0x10)
+    // - CLOCK (Horloge)  : Banque 2, octet 3, bit 2 (0x04)
+    // - FLASH (Flash)    : Banque 2, octet 4, bit 0 (0x01)
+    const file_on = cpu.xram_banks.bank2[1] & 0x40 != 0;
+    const game_on = cpu.xram_banks.bank2[2] & 0x10 != 0;
+    const clock_on = cpu.xram_banks.bank2[3] & 0x04 != 0;
+    const flash_on = cpu.xram_banks.bank2[4] & 0x01 != 0;
+
+    const Icon = struct {
+        name: [:0]const u8,
+        active: bool,
+    };
+    const icons = [_]Icon{
+        .{ .name = "FILE", .active = file_on },
+        .{ .name = "GAME", .active = game_on },
+        .{ .name = "CLOCK", .active = clock_on },
+        .{ .name = "FLASH", .active = flash_on },
+    };
+
+    const box_w: i32 = 96;
+    const box_h: i32 = 22;
+    const spacing: i32 = 14;
+    const total_w = 4 * box_w + 3 * spacing; // 384 + 42 = 426
+    const start_x: i32 = @divTrunc(screen_w - total_w, 2);
+
+    for (icons, 0..) |icn, idx| {
+        const ix = start_x + @as(i32, @intCast(idx)) * (box_w + spacing);
+        const iy = y_start;
+
+        if (icn.active) {
+            // Icône active : segment LCD noir plein avec texte couleur fond
+            rl.drawRectangle(ix, iy, box_w, box_h, FG);
+            const text_w = rl.measureText(icn.name, 13);
+            rl.drawText(icn.name, ix + @divTrunc(box_w - text_w, 2), iy + 4, 13, BG);
+        } else {
+            // Icône inactive : contour estompé style LCD éteint
+            const inactive_color = rl.Color.init(155, 175, 145, 255);
+            rl.drawRectangleLines(ix, iy, box_w, box_h, inactive_color);
+            const text_w = rl.measureText(icn.name, 13);
+            rl.drawText(icn.name, ix + @divTrunc(box_w - text_w, 2), iy + 4, 13, inactive_color);
+        }
     }
 }
 
@@ -320,22 +388,6 @@ fn renderLcd(cpu: *Cpu) void {
                 b = (b + 1) % 2;
                 p -= 128;
             }
-        }
-    }
-
-    // Render bank 2 icon strip below the main LCD
-    // Bank 2: 6 bytes = 48 pixels wide, rendered as a single row
-    const icon_y: i32 = @intCast(LCD_H * SCALE + 4);
-    var icon_x_byte: u32 = 0;
-    while (icon_x_byte < 6) : (icon_x_byte += 1) {
-        const byte = cpu.xram_banks.bank2[icon_x_byte];
-        var bit: u3 = 7;
-        while (true) : (bit -%= 1) {
-            if (byte & (@as(u8, 1) << @intCast(bit)) != 0) {
-                const px: i32 = @intCast(icon_x_byte * 8 + (7 - @as(u32, bit)));
-                rl.drawRectangle(px * SCALE, icon_y, SCALE, SCALE, FG);
-            }
-            if (bit == 0) break;
         }
     }
 }
@@ -388,8 +440,15 @@ fn updateButtons(cpu: *Cpu, frames: u64) void {
     }
 
     cpu.p3_buttons = buttons;
-    // RAM 0x70 est active-high dans le BIOS VMU (P3 xor 0xFF : 1 = appuyé, 0 = relâché)
-    cpu.ram_bank0[0x70] = buttons ^ 0xFF;
+    if (cpu.inst_bank.bank_id == .flash0) {
+        // En jeu : synchroniser le latch 0x70 active-high pour les jeux qui le lisent
+        cpu.ram_bank0[0x70] = buttons ^ 0xFF;
+    } else if (buttons == 0xFF and prev_buttons != 0xFF) {
+        // En ROM BIOS : quand les boutons sont relâchés, synchroniser le déverrouillage
+        // (comme la routine d'interruption du base timer 0x1EB6)
+        cpu.ram_bank0[0x72] = cpu.ram_bank0[0x70];
+        cpu.ram_bank0[0x70] = 0x00;
+    }
 
     // Log des changements de boutons pour debug
     if (buttons != prev_buttons) {
