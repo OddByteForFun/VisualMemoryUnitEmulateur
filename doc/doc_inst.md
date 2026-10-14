@@ -20,10 +20,10 @@ Le LC86K possède 70 instructions (p561 du manuel).
 | SUBC | `0xB1` | #i8 | CY AC OV P | ACC ← ACC − i8 − CY |
 | SUBC | `0xB2-0xB3` | d9 | CY AC OV P | ACC ← ACC − (d9) − CY |
 | SUBC | `0xB4-0xB7` | @Ri | CY AC OV P | ACC ← ACC − ((Ri)) − CY |
-| INC | `0x62-0x63` | d9 | P | (d9) ← (d9) + 1 |
-| INC | `0x64-0x67` | @Ri | P | ((Ri)) ← ((Ri)) + 1 |
-| DEC | `0x72-0x73` | d9 | P | (d9) ← (d9) − 1 |
-| DEC | `0x74-0x77` | @Ri | P | ((Ri)) ← ((Ri)) − 1 |
+| INC | `0x62-0x63` | d9 | — | (d9) ← (d9) + 1 |
+| INC | `0x64-0x67` | @Ri | — | ((Ri)) ← ((Ri)) + 1 |
+| DEC | `0x72-0x73` | d9 | — | (d9) ← (d9) − 1 |
+| DEC | `0x74-0x77` | @Ri | — | ((Ri)) ← ((Ri)) − 1 |
 | MUL | `0x30` | impl | CY=0, OV | B:ACC:C ← (ACC:C) × B |
 | DIV | `0x40` | impl | CY=0, OV | ACC:C, mod(B) ← (ACC:C) ÷ B |
 
@@ -40,9 +40,9 @@ Le LC86K possède 70 instructions (p561 du manuel).
 | XOR | `0xF1` | #i8 | P | ACC ← ACC ^ i8 |
 | XOR | `0xF2-0xF3` | d9 | P | ACC ← ACC ^ (d9) |
 | XOR | `0xF4-0xF7` | @Ri | P | ACC ← ACC ^ ((Ri)) |
-| ROL | `0xE0` | impl | CY | rotate left through ACC, LSB ← MSB |
+| ROL | `0xE0` | impl | — | rotate left through ACC, LSB ← MSB |
 | ROLC | `0xF0` | impl | CY | rotate left through ACC via CY |
-| ROR | `0xC0` | impl | CY | rotate right through ACC, MSB ← LSB |
+| ROR | `0xC0` | impl | — | rotate right through ACC, MSB ← LSB |
 | RORC | `0xD0` | impl | CY | rotate right through ACC via CY |
 
 ### Data transfer instructions

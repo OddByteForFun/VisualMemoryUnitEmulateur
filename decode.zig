@@ -150,13 +150,11 @@ pub fn step(cpu: *Cpu) u8 {
             const addr = readEA(cpu, dec);
             const val = cpu.load8(addr) +% 1;
             cpu.store8(addr, val);
-            cpu.psw.p = @popCount(val) % 2 == 1;
         },
         .dec_d9, .dec_ri => {
             const addr = readEA(cpu, dec);
             const val = cpu.load8(addr) -% 1;
             cpu.store8(addr, val);
-            cpu.psw.p = @popCount(val) % 2 == 1;
         },
 
         .ld => {
@@ -226,11 +224,9 @@ pub fn step(cpu: *Cpu) u8 {
             cpu.psw.cy = false;
         },
         .ror => {
-            cpu.psw.cy = (cpu.a & 1) == 1;
             cpu.a = (cpu.a >> 1) | ((cpu.a & 1) << 7);
         },
         .rol => {
-            cpu.psw.cy = (cpu.a >> 7) == 1;
             cpu.a = (cpu.a << 1) | (cpu.a >> 7);
         },
         .rorc => {
@@ -326,6 +322,7 @@ pub fn step(cpu: *Cpu) u8 {
             cpu.ram_bank0[cpu.sp] = @truncate(return_addr >> 8);
             const target = (@as(u16, hi) << 8) | @as(u16, lo);
             cpu.pc = target;
+            cpu.syncInstructionBank();
         },
         .jmpf => {
             const hi = cpu.fetch8();

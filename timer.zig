@@ -143,24 +143,36 @@ pub fn tickBaseTimer(self: *Cpu, cycles_used: u8) void {
     self.base_timer_acc +%= @as(u32, self.fBST_per_cycle_fp) * cycles_used;
     while (self.base_timer_acc >= 0x10000) {
         self.base_timer_acc -= 0x10000;
-        const old_counter = self.base_timer_counter;
         self.base_timer_counter = (self.base_timer_counter + 1) & 0x3FFF; // 14-bit
         const new_counter = self.base_timer_counter;
 
         // BT0 : configurable rate based on BTCR7
         // BTCR7=0: interrupt every 16384 ticks
         // BTCR7=1: interrupt every 64 ticks
-        const int0_rate: u16 = if (btcr & Cpu.BTCR_BT0_CYCLE != 0) 0x0040 else 0x4000;
-        if (old_counter / int0_rate < new_counter / int0_rate or new_counter == 0) {
+        const int0_rate: u16 = if (btcr & Cpu.BTCR_BT0_CYCLE != 0) 64 else 16384;
+        if (new_counter % int0_rate == 0) {
             self.sfr_raw[Cpu.SFR_BTCR] |= Cpu.BTCR_BT0_FLAG;
         }
 
-        // BT1 : seuil configurable selon BTCR5:BTCR4
-        const bt1_idx: u2 = @truncate((btcr & (Cpu.BTCR_BT1_CYCLE_HI | Cpu.BTCR_BT1_CYCLE_LO)) >> 4);
-        if (new_counter == Cpu.BT1_THRESHOLDS[bt1_idx]) {
+        // BT1 : fréquence périodique selon BTCR5:BTCR4 et BTCR7
+        const int1_rate = baseTimerInt1Rate(btcr);
+        if (int1_rate != 0 and new_counter % int1_rate == 0) {
             self.sfr_raw[Cpu.SFR_BTCR] |= Cpu.BTCR_BT1_FLAG;
         }
     }
+}
+
+pub fn baseTimerInt1Rate(btcr: u8) u16 {
+    const cycle = btcr & (Cpu.BTCR_BT0_CYCLE | Cpu.BTCR_BT1_CYCLE_HI | Cpu.BTCR_BT1_CYCLE_LO);
+    return switch (cycle) {
+        0x00, 0x80 => 32,
+        0x10, 0x90 => 128,
+        0x20 => 512,
+        0x30 => 2048,
+        0xA0 => 2,
+        0xB0 => 8,
+        else => 0,
+    };
 }
 
 pub fn tick(self: *Cpu, cycles_used: u8) void {
