@@ -1,10 +1,14 @@
-﻿const std = @import("std");
+const std = @import("std");
 const testing = std.testing;
 const Cpu = @import("lc86K").Cpu;
 const step = @import("decode").step;
 
+const dbg = @import("debug");
+const vmu = @import("vmu");
+
 fn makeCpu(rom: []u8) Cpu {
     @memset(rom, 0);
+    dbg.log_level = .none;
     return Cpu.init(rom);
 }
 
@@ -967,4 +971,172 @@ test "VMC-214 CALLF example 1" {
     try testing.expectEqual(@as(u8, 0x00), cpu.a);
     _ = step(&cpu); // RET
     try testing.expectEqual(@as(u16, 0xFFF), cpu.pc);
+}
+
+test "ROL and ROR preserve CY flag" {
+    var rom: [65536]u8 = undefined;
+    var cpu = makeCpu(&rom);
+    rom[0] = 0xE0; // ROL
+    rom[1] = 0xC0; // ROR
+
+    // Test with CY = true
+    cpu.a = 0x81; // bit 7 = 1, bit 0 = 1
+    cpu.psw.cy = true;
+    _ = step(&cpu); // ROL: a becomes 0x03, CY must remain true
+    try testing.expectEqual(@as(u8, 0x03), cpu.a);
+    try testing.expect(cpu.psw.cy);
+
+    _ = step(&cpu); // ROR: a becomes 0x81, CY must remain true
+    try testing.expectEqual(@as(u8, 0x81), cpu.a);
+    try testing.expect(cpu.psw.cy);
+
+    // Test with CY = false
+    cpu.pc = 0;
+    cpu.a = 0x80;
+    cpu.psw.cy = false;
+    _ = step(&cpu); // ROL: a becomes 0x01, CY must remain false
+    try testing.expectEqual(@as(u8, 0x01), cpu.a);
+    try testing.expect(!cpu.psw.cy);
+
+    _ = step(&cpu); // ROR: a becomes 0x80, CY must remain false
+    try testing.expectEqual(@as(u8, 0x80), cpu.a);
+    try testing.expect(!cpu.psw.cy);
+}
+
+test "INC and DEC do not alter PSW.P" {
+    var rom: [65536]u8 = undefined;
+    var cpu = makeCpu(&rom);
+    rom[0] = 0x62; rom[1] = 0x50; // INC 0x50 (RAM)
+    rom[2] = 0x72; rom[3] = 0x50; // DEC 0x50 (RAM)
+
+    cpu.ram_bank0[0x50] = 0x00; // popcount = 0 (even)
+    cpu.psw.p = true; // Set parity to true (from a previous ACC op)
+    _ = step(&cpu); // INC: ram becomes 0x01 (popcount=1), but PSW.P must stay true!
+    try testing.expectEqual(@as(u8, 0x01), cpu.ram_bank0[0x50]);
+    try testing.expect(cpu.psw.p);
+
+    cpu.psw.p = false;
+    _ = step(&cpu); // DEC: ram becomes 0x00, PSW.P must stay false!
+    try testing.expectEqual(@as(u8, 0x00), cpu.ram_bank0[0x50]);
+    try testing.expect(!cpu.psw.p);
+}
+
+test "Base Timer INT1 periodic rate" {
+    var rom: [65536]u8 = undefined;
+    var cpu = makeCpu(&rom);
+    // Enable base timer, INT1 rate = 32 ticks (BTCR5:4 = 00)
+    cpu.sfr_raw[Cpu.SFR_BTCR] = Cpu.BTCR_BT_RUN | Cpu.BTCR_BT1_IE;
+    // Set fixed-point step so each cycle = exactly 1 fBST tick (65536)
+    cpu.fBST_per_cycle_fp = 0x10000;
+
+    // Tick 31 cycles: counter goes 0 -> 31, no flag yet
+    cpu.tickTimers(31);
+    try testing.expectEqual(@as(u16, 31), cpu.base_timer_counter);
+    try testing.expectEqual(@as(u8, 0), cpu.sfr_raw[Cpu.SFR_BTCR] & Cpu.BTCR_BT1_FLAG);
+
+    // Tick 1 more cycle: counter becomes 32 (multiple of 32) -> flag set!
+    cpu.tickTimers(1);
+    try testing.expectEqual(@as(u16, 32), cpu.base_timer_counter);
+    try testing.expect(cpu.sfr_raw[Cpu.SFR_BTCR] & Cpu.BTCR_BT1_FLAG != 0);
+
+    // Clear flag and tick 32 more cycles: flag must be set again!
+    cpu.sfr_raw[Cpu.SFR_BTCR] &= ~Cpu.BTCR_BT1_FLAG;
+    cpu.tickTimers(32);
+    try testing.expectEqual(@as(u16, 64), cpu.base_timer_counter);
+    try testing.expect(cpu.sfr_raw[Cpu.SFR_BTCR] & Cpu.BTCR_BT1_FLAG != 0);
+}
+
+test "CALLF commits pending bank switch" {
+    var rom: [65536]u8 = undefined;
+    var cpu = makeCpu(&rom);
+    rom[0] = 0x20; rom[1] = 0x01; rom[2] = 0x00; // CALLF 0x0100
+    cpu.pending_ext = 0x88; // Flash0 switch requested
+    _ = step(&cpu);
+    try testing.expectEqual(@as(u16, 0x0100), cpu.pc);
+    try testing.expectEqual(cpu.inst_bank.bank_id, .flash0);
+}
+
+test "VMU VMS parse with VMI companion" {
+    var fake_vms: [1024]u8 = undefined;
+    @memset(&fake_vms, 0);
+    @memcpy(fake_vms[0x200..0x210], "MY_COOL_GAME    ");
+    fake_vms[0x240] = 1;
+
+    var fake_vmi: [108]u8 = undefined;
+    @memset(&fake_vmi, 0);
+    @memcpy(fake_vmi[0x58..0x64], "MYGAME      ");
+    fake_vmi[0x64] = 0x02; // Type != 0 -> GAME
+    fake_vmi[0x66] = 0x00; // not protected
+
+    const info = vmu.parseVms(&fake_vms, &fake_vmi);
+    try testing.expectEqual(@as(u8, 0xCC), info.file_type); // GAME
+    try testing.expectEqual(@as(u16, 1), info.header_offset);
+    try testing.expectEqual(@as(u8, 0x80), info.copy_protect);
+    try testing.expectEqualStrings("MYGAME      ", &info.filename);
+    try testing.expectEqual(@as(u16, 2), info.size_blocks); // 1024 / 512 = 2 blocks
+}
+
+test "VMU VMS standalone auto-detect GAME vs DATA" {
+    // GAME file: header at 0x200
+    var game_vms: [1024]u8 = undefined;
+    @memset(&game_vms, 0xFF);
+    @memset(game_vms[0x200..0x260], 0);
+    @memcpy(game_vms[0x200..0x210], "SUPER_GAME      ");
+    game_vms[0x240] = 1; // icon count = 1
+
+    const game_info = vmu.parseVms(&game_vms, null);
+    try testing.expectEqual(@as(u8, 0xCC), game_info.file_type);
+    try testing.expectEqual(@as(u16, 1), game_info.header_offset);
+    try testing.expectEqualStrings("SUPER_GAME  ", &game_info.filename);
+
+    // DATA file: header at 0x000
+    var data_vms: [512]u8 = undefined;
+    @memset(&data_vms, 0);
+    @memcpy(data_vms[0x00..0x10], "SAVE_DATA       ");
+    data_vms[0x40] = 1;
+
+    const data_info = vmu.parseVms(&data_vms, null);
+    try testing.expectEqual(@as(u8, 0x33), data_info.file_type);
+    try testing.expectEqual(@as(u16, 0), data_info.header_offset);
+    try testing.expectEqualStrings("SAVE_DATA   ", &data_info.filename);
+}
+
+test "VMU installVms filesystem integration" {
+    var rom: [65536]u8 = undefined;
+    var cpu = makeCpu(&rom);
+
+    vmu.initVmuFlash(&cpu);
+
+    var fake_vms: [1536]u8 = undefined; // 3 blocks (0, 1, 2)
+    @memset(&fake_vms, 0xAA);
+    // Valid header at 0x200
+    @memset(fake_vms[0x200..0x280], 0);
+    @memcpy(fake_vms[0x200..0x210], "TETRIS          ");
+    fake_vms[0x240] = 1;
+
+    const info = vmu.parseVms(&fake_vms, null);
+    try testing.expectEqual(@as(u16, 3), info.size_blocks);
+
+    vmu.installVms(&cpu, info, &fake_vms);
+
+    // Verify directory entry in block 253 (0x1FA00)
+    const dir_base = 253 * 512;
+    try testing.expectEqual(@as(u8, 0xCC), cpu.flash[dir_base + 0x00]); // file_type GAME
+    try testing.expectEqual(@as(u8, 0x80), cpu.flash[dir_base + 0x01]); // copy_protect
+    try testing.expectEqual(@as(u8, 0x00), cpu.flash[dir_base + 0x02]); // first block LSB
+    try testing.expectEqualStrings("TETRIS      ", cpu.flash[dir_base + 0x04 .. dir_base + 0x10]);
+    try testing.expectEqual(@as(u8, 3), cpu.flash[dir_base + 0x18]); // size_blocks LSB
+    try testing.expectEqual(@as(u8, 1), cpu.flash[dir_base + 0x1A]); // header_offset LSB
+
+    // Verify FAT chain in block 254 (0x1FC00)
+    const fat_base = 254 * 512;
+    // block 0 points to block 1
+    try testing.expectEqual(@as(u8, 1), cpu.flash[fat_base + 0 * 2]);
+    try testing.expectEqual(@as(u8, 0), cpu.flash[fat_base + 0 * 2 + 1]);
+    // block 1 points to block 2
+    try testing.expectEqual(@as(u8, 2), cpu.flash[fat_base + 1 * 2]);
+    try testing.expectEqual(@as(u8, 0), cpu.flash[fat_base + 1 * 2 + 1]);
+    // block 2 is FAT_LastInFile (0xFFFA)
+    try testing.expectEqual(@as(u8, 0xFA), cpu.flash[fat_base + 2 * 2]);
+    try testing.expectEqual(@as(u8, 0xFF), cpu.flash[fat_base + 2 * 2 + 1]);
 }

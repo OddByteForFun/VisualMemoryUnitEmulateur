@@ -6,6 +6,7 @@ const decode = @import("decode");
 const step = decode.step;
 const rl = @import("raylib");
 const vmu = @import("vmu");
+const Buzzer = @import("buzzer").Buzzer;
 
 const LCD_W = 48;
 const LCD_H = 32;
@@ -82,11 +83,31 @@ pub fn main(init: std.process.Init) !void {
     const game_file = try dir.openFile(init.io, game_path, .{});
     defer game_file.close(init.io);
 
-    const game_size = try game_file.readPositionalAll(init.io, cpu.flash[0..65536], 0);
-    std.debug.print("Game: {s} ({d} bytes)\n", .{ game_path, game_size });
+    const game_buf = try init.arena.allocator().alloc(u8, 65536);
+    const game_size = try game_file.readPositionalAll(init.io, game_buf, 0);
 
-    // Create directory entry and FAT chain for the game
-    vmu.installGame(&cpu, game_size);
+    // Détection d'un fichier .vmi compagnon adjacent
+    var maybe_vmi_data: ?[]const u8 = null;
+    if (std.mem.endsWith(u8, game_path, ".vms") or std.mem.endsWith(u8, game_path, ".VMS")) {
+        const vmi_path = try std.fmt.allocPrint(init.arena.allocator(), "{s}.vmi", .{game_path[0 .. game_path.len - 4]});
+        if (dir.openFile(init.io, vmi_path, .{})) |vmi_file| {
+            defer vmi_file.close(init.io);
+            const vmi_buf = try init.arena.allocator().alloc(u8, 256);
+            const vmi_read = try vmi_file.readPositionalAll(init.io, vmi_buf, 0);
+            maybe_vmi_data = vmi_buf[0..vmi_read];
+            std.debug.print("VMI: {s} ({d} bytes)\n", .{ vmi_path, vmi_read });
+        } else |_| {}
+    }
+
+    const vms_info = vmu.parseVms(game_buf[0..game_size], maybe_vmi_data);
+    vmu.installVms(&cpu, vms_info, game_buf[0..game_size]);
+    std.debug.print("Game: {s} ({d} bytes, {d} blocks, type=0x{X:0>2}, name='{s}')\n", .{
+        game_path,
+        game_size,
+        vms_info.size_blocks,
+        vms_info.file_type,
+        vms_info.filename,
+    });
 
     cpu.reset();
 
@@ -107,6 +128,10 @@ pub fn main(init: std.process.Init) !void {
     rl.initWindow(win_w, win_h, "LC86K VMU Emulator");
     defer rl.closeWindow();
     rl.setTargetFPS(60);
+
+    var buzzer = Buzzer.init();
+    buzzer.startAudio();
+    defer buzzer.deinit();
 
     var cycles: u64 = 0;
     var frames: u64 = 0;
@@ -225,17 +250,29 @@ pub fn main(init: std.process.Init) !void {
         rl.drawText(status, 4, win_h - 18, 14, rl.Color.white);
 
         rl.endDrawing();
+        buzzer.update(&cpu);
         frames += 1;
 
     }
 }
 
 fn renderLcd(cpu: *Cpu) void {
+    var stad = cpu.sfr_raw[Cpu.SFR_STAD];
+    if (stad >= 0x83) stad -%= 0x83;
+    var b: u2 = @truncate(stad >> 6);
+    var p: u8 = (stad & 0x3F) * 2;
+
     var y: u32 = 0;
     while (y < LCD_H) : (y += 1) {
         var x_byte: u32 = 0;
         while (x_byte < BYTES_PER_ROW) : (x_byte += 1) {
-            const byte = getXramByte(cpu, y, x_byte);
+            const byte = switch (b) {
+                0 => cpu.xram_banks.bank0[p],
+                1 => cpu.xram_banks.bank1[p],
+                else => 0,
+            };
+            p += 1;
+
             var bit: u3 = 7;
             while (true) : (bit -%= 1) {
                 if (byte & (@as(u8, 1) << @intCast(bit)) != 0) {
@@ -245,35 +282,30 @@ fn renderLcd(cpu: *Cpu) void {
                 }
                 if (bit == 0) break;
             }
+
+            if ((p & 0x0F) >= 12) p += 4;
+            if (p >= 128) {
+                b = (b + 1) % 2;
+                p -= 128;
+            }
         }
     }
 
     // Render bank 2 icon strip below the main LCD
     // Bank 2: 6 bytes = 48 pixels wide, rendered as a single row
     const icon_y: i32 = @intCast(LCD_H * SCALE + 4);
-    var x_byte: u32 = 0;
-    while (x_byte < 6) : (x_byte += 1) {
-        const byte = cpu.xram_banks.bank2[x_byte];
+    var icon_x_byte: u32 = 0;
+    while (icon_x_byte < 6) : (icon_x_byte += 1) {
+        const byte = cpu.xram_banks.bank2[icon_x_byte];
         var bit: u3 = 7;
         while (true) : (bit -%= 1) {
             if (byte & (@as(u8, 1) << @intCast(bit)) != 0) {
-                const px: i32 = @intCast(x_byte * 8 + (7 - @as(u32, bit)));
+                const px: i32 = @intCast(icon_x_byte * 8 + (7 - @as(u32, bit)));
                 rl.drawRectangle(px * SCALE, icon_y, SCALE, SCALE, FG);
             }
             if (bit == 0) break;
         }
     }
-}
-
-fn getXramByte(cpu: *Cpu, row: u32, byte_col: u32) u8 {
-    if (row >= LCD_H) return 0;
-    const xram_row = row / 2;
-    const row_in_pair = row % 2;
-    const stad = @as(u32, cpu.sfr_raw[Cpu.SFR_STAD]); // VMU.pdf VMD-123: STAD × 2 = offset XRAM
-    const offset = (xram_row * 16 + row_in_pair * 6 + byte_col + stad * 2) % 256;
-    if (offset < 128) return cpu.xram_banks.bank0[offset];
-    if (offset < 256) return cpu.xram_banks.bank1[offset - 128];
-    return 0;
 }
 
 fn updateButtons(cpu: *Cpu) void {

@@ -138,48 +138,172 @@ pub fn initVmuFlash(cpu: *Cpu) void {
     @memset(flash[241 * 512 .. 254 * 512], 0x00);
 }
 
-/// Create the directory entry for the game at directory table (block 253,
-/// entry 0) and set up its FAT chain (block 0 → 1 → ... → FAT_LastInFile).
-/// The caller must have loaded the game image into flash blocks 0..N first.
-pub fn installGame(cpu: *Cpu, game_size: usize) void {
-    const flash = &cpu.flash;
-    const dir_base = 253 * 512;
-    flash[dir_base + 0x00] = 0xCC; // FileType = Game
-    flash[dir_base + 0x01] = 0x80; // CopyProtection = not copy protected
-    flash[dir_base + 0x02] = 0x00; // StartFAT low = 0
-    flash[dir_base + 0x03] = 0x00; // StartFAT high = 0
-    // Filename: 12 bytes at offset 0x04 (padded with 0)
-    @memset(flash[dir_base + 0x04 .. dir_base + 0x10], 0x00);
-    const game_name = "GAME";
-    for (game_name, 0..) |ch, idx| {
-        flash[dir_base + 0x04 + idx] = ch;
+pub const VmsInfo = struct {
+    file_type: u8 = 0xCC, // 0xCC = Game, 0x33 = Data
+    copy_protect: u8 = 0x80, // 0x80 = not protected, 0x00 = protected
+    filename: [12]u8 = "GAME        ".*,
+    size_blocks: u16 = 0,
+    header_offset: u16 = 1, // 1 for Game, 0 for Data
+    vmu_desc: [16]u8 = [_]u8{' '} ** 16,
+    dc_desc: [32]u8 = [_]u8{' '} ** 32,
+    app_id: [16]u8 = [_]u8{' '} ** 16,
+    icon_count: u16 = 1,
+};
+
+fn isValidVmsHeader(hdr: []const u8) bool {
+    if (hdr.len < 0x58) return false;
+    const icon_count = @as(u16, hdr[0x40]) | (@as(u16, hdr[0x41]) << 8);
+    const eyecatch = @as(u16, hdr[0x44]) | (@as(u16, hdr[0x45]) << 8);
+    if (icon_count > 3 or eyecatch > 3) return false;
+    // Les octets réservés à 0x4C..0x58 doivent être nuls dans un en-tête VMS officiel
+    for (hdr[0x4C..0x58]) |b| {
+        if (b != 0) return false;
     }
-    // SizeInBlocks at 0x18
-    const size_blocks: u16 = @intCast((game_size + 511) / 512);
-    flash[dir_base + 0x18] = @truncate(size_blocks);
-    flash[dir_base + 0x19] = @truncate(size_blocks >> 8);
-    // VmsHeaderBlockOffset at 0x1A (header is at block 1)
-    flash[dir_base + 0x1A] = 0x01;
-    flash[dir_base + 0x1B] = 0x00;
+    return true;
+}
 
-    @memset(flash[dir_base + 0x1C .. dir_base + 0x20], 0x00);
+/// Analyse un fichier VMS (et son fichier VMI optionnel) pour extraire les métadonnées officielles.
+pub fn parseVms(vms_data: []const u8, maybe_vmi_data: ?[]const u8) VmsInfo {
+    var info = VmsInfo{
+        .size_blocks = @intCast((vms_data.len + 511) / 512),
+    };
 
-    // Set up FAT chain for game blocks (block 0 → 1 → 2 → ... → FAT_LastInFile)
-    const fat_base: usize = 254 * 512;
-    const last_game_block: u16 = if (game_size > 0 and game_size >= 2 * 512) @intCast((game_size + 511) / 512 - 1) else 0;
-    {
-        var b: u16 = 0;
-        while (b <= last_game_block) : (b += 1) {
-            const fat_off: usize = fat_base + @as(usize, b) * 2;
-            if (b == last_game_block) {
-                flash[fat_off] = 0xFA; // FAT_LastInFile low
-                flash[fat_off + 1] = 0xFF; // FAT_LastInFile high
+    // 1. Si un fichier .VMI est fourni (descripteur sidecar de 108 octets)
+    if (maybe_vmi_data) |vmi| {
+        if (vmi.len >= 108) {
+            // Type de fichier à 0x64 (0 = DATA, autre = GAME)
+            const vmi_type = @as(u16, vmi[0x64]) | (@as(u16, vmi[0x65]) << 8);
+            if (vmi_type == 0) {
+                info.file_type = 0x33;
+                info.header_offset = 0;
             } else {
-                flash[fat_off] = @truncate(b + 1); // next block low
-                flash[fat_off + 1] = 0x00; // next block high
+                info.file_type = 0xCC;
+                info.header_offset = 1;
+            }
+
+            // Protection copie à 0x66 (1 = protégé, 0 = non protégé)
+            if (vmi[0x66] != 0) {
+                info.copy_protect = 0x00;
+            }
+
+            // Nom de fichier flash à 0x58 (12 octets)
+            var has_name = false;
+            for (vmi[0x58..0x64]) |c| {
+                if (c != 0 and c != ' ') {
+                    has_name = true;
+                    break;
+                }
+            }
+            if (has_name) {
+                @memcpy(&info.filename, vmi[0x58..0x64]);
+            }
+        }
+    } else {
+        // Détection automatique GAME vs DATA si pas de .vmi
+        if (vms_data.len >= 0x280 and isValidVmsHeader(vms_data[0x200..0x280])) {
+            info.file_type = 0xCC;
+            info.header_offset = 1;
+        } else if (vms_data.len >= 0x80 and isValidVmsHeader(vms_data[0x00..0x80])) {
+            info.file_type = 0x33;
+            info.header_offset = 0;
+        }
+    }
+
+    // 2. Détection et extraction de l'en-tête VMS dans vms_data
+    var header_slice: ?[]const u8 = null;
+
+    if (vms_data.len >= 0x280 and info.header_offset == 1) {
+        // En-tête à 0x200 (GAME)
+        header_slice = vms_data[0x200..0x280];
+    } else if (vms_data.len >= 0x80) {
+        // En-tête à 0x000 (DATA ou fallback)
+        header_slice = vms_data[0x00..0x80];
+    }
+
+    if (header_slice) |hdr| {
+        @memcpy(&info.vmu_desc, hdr[0x00..0x10]);
+        @memcpy(&info.dc_desc, hdr[0x10..0x30]);
+        @memcpy(&info.app_id, hdr[0x30..0x40]);
+        info.icon_count = @as(u16, hdr[0x40]) | (@as(u16, hdr[0x41]) << 8);
+
+        // Si le nom de fichier n'a pas été fourni par un .VMI, le dériver de vmu_desc
+        if (maybe_vmi_data == null) {
+            var valid_chars: usize = 0;
+            for (info.vmu_desc, 0..) |c, idx| {
+                if (idx >= 12) break;
+                if ((c >= 'A' and c <= 'Z') or (c >= 'a' and c <= 'z') or (c >= '0' and c <= '9') or c == '_' or c == '-') {
+                    info.filename[idx] = c;
+                    valid_chars += 1;
+                } else if (valid_chars > 0 and idx < 12) {
+                    info.filename[idx] = ' ';
+                }
+            }
+            if (valid_chars == 0) {
+                @memcpy(&info.filename, "GAME        ");
             }
         }
     }
+
+    return info;
+}
+
+/// Installe un fichier VMS dans la flash avec son entrée de répertoire et sa chaîne FAT
+pub fn installVms(cpu: *Cpu, info: VmsInfo, vms_data: []const u8) void {
+    const flash = &cpu.flash;
+    const copy_len = @min(vms_data.len, 65536);
+    @memcpy(flash[0..copy_len], vms_data[0..copy_len]);
+
+    const dir_base = 253 * 512;
+    flash[dir_base + 0x00] = info.file_type;
+    flash[dir_base + 0x01] = info.copy_protect;
+    flash[dir_base + 0x02] = 0x00; // StartFAT low = 0
+    flash[dir_base + 0x03] = 0x00; // StartFAT high = 0
+
+    // Nom de fichier : 12 octets à l'offset 0x04
+    @memcpy(flash[dir_base + 0x04 .. dir_base + 0x10], &info.filename);
+
+    // Timestamp à l'offset 0x10 (format BCD)
+    flash[dir_base + 0x10] = 0x20; // Siècle (20)
+    flash[dir_base + 0x11] = 0x26; // Année (26)
+    flash[dir_base + 0x12] = 0x07; // Mois (07)
+    flash[dir_base + 0x13] = 0x17; // Jour (17)
+    flash[dir_base + 0x14] = 0x12; // Heure (12)
+    flash[dir_base + 0x15] = 0x30; // Minute (30)
+    flash[dir_base + 0x16] = 0x00; // Seconde (00)
+    flash[dir_base + 0x17] = 0x00; // Jour de la semaine
+
+    // Taille en blocs à l'offset 0x18
+    flash[dir_base + 0x18] = @truncate(info.size_blocks);
+    flash[dir_base + 0x19] = @truncate(info.size_blocks >> 8);
+
+    // Offset de l'en-tête VMS en blocs à l'offset 0x1A
+    flash[dir_base + 0x1A] = @truncate(info.header_offset);
+    flash[dir_base + 0x1B] = @truncate(info.header_offset >> 8);
+
+    @memset(flash[dir_base + 0x1C .. dir_base + 0x20], 0x00);
+
+    // Chaîne FAT pour les blocs du fichier (0 -> 1 -> ... -> FAT_LastInFile)
+    const fat_base: usize = 254 * 512;
+    const last_block: u16 = if (info.size_blocks > 0) info.size_blocks - 1 else 0;
+    var b: u16 = 0;
+    while (b <= last_block) : (b += 1) {
+        const fat_off: usize = fat_base + @as(usize, b) * 2;
+        if (b == last_block) {
+            flash[fat_off] = 0xFA; // FAT_LastInFile low
+            flash[fat_off + 1] = 0xFF; // FAT_LastInFile high
+        } else {
+            flash[fat_off] = @truncate(b + 1);
+            flash[fat_off + 1] = 0x00;
+        }
+    }
+}
+
+pub fn installGame(cpu: *Cpu, game_size: usize) void {
+    var info = VmsInfo{
+        .size_blocks = @intCast((game_size + 511) / 512),
+    };
+    @memcpy(&info.filename, "GAME        ");
+    installVms(cpu, info, cpu.flash[0..game_size]);
 }
 
 /// Initialize BIOS date and SFRs to match libevmu's EvmuRam_IBehavior_reset_().

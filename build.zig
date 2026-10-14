@@ -69,6 +69,15 @@ pub fn build(b: *std.Build) void {
 
     main_mod.addImport("raylib", raylib);
 
+    const buzzer_mod = b.createModule(.{
+        .root_source_file = b.path("buzzer.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    buzzer_mod.addImport("lc86K", lc86K_mod);
+    buzzer_mod.addImport("raylib", raylib);
+    main_mod.addImport("buzzer", buzzer_mod);
+
     const exe = b.addExecutable(.{
         .name = "lc86K",
         .root_module = main_mod,
@@ -89,6 +98,8 @@ pub fn build(b: *std.Build) void {
     });
     test_mod.addImport("lc86K", lc86K_mod);
     test_mod.addImport("decode", decode_mod);
+    test_mod.addImport("debug", debug_mod);
+    test_mod.addImport("vmu", vmu_mod);
 
     const tests = b.addTest(.{ .root_module = test_mod });
     const run_tests = b.addRunArtifact(tests);
