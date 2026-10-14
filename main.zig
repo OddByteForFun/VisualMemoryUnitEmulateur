@@ -171,7 +171,7 @@ pub fn main(init: std.process.Init) !void {
             std.debug.print("[BIOS] Reset vers le menu BIOS officiel\n", .{});
         }
 
-        updateButtons(&cpu);
+        updateButtons(&cpu, frames);
 
         const cycles_per_frame: u64 = cpu.cpu_freq / 60;
         var i: u64 = 0;
@@ -213,12 +213,12 @@ pub fn main(init: std.process.Init) !void {
 
         if (!game_started and cpu.bios_phase == .bios_game_launch) {
             // Lancement automatique direct, ou lancement manuel depuis le menu BIOS sur appui du bouton A
-            const a_pressed = rl.isKeyDown(.enter) or rl.isKeyDown(.space) or rl.isKeyDown(.k) or (if (!azerty_mode) rl.isKeyDown(.z) else rl.isKeyDown(.w));
+            const a_pressed = frames >= 10 and (rl.isKeyDown(.enter) or rl.isKeyDown(.space) or rl.isKeyDown(.k) or (if (!azerty_mode) rl.isKeyDown(.z) else rl.isKeyDown(.w)));
             if (!use_bios_menu or a_pressed) {
                 // Clear P3 latch before game starts
                 cpu.p3_buttons = 0xFF;
                 cpu.prev_p3_buttons = 0xFF;
-                cpu.ram_bank0[0x70] = 0xFF;
+                cpu.ram_bank0[0x70] = 0x00;
                 cpu.sfr_raw[Cpu.SFR_P3INT] = 0xFD;
                 cpu.setInstructionBank(.flash0);
                 cpu.pc = 0x0000;
@@ -340,39 +340,43 @@ fn renderLcd(cpu: *Cpu) void {
     }
 }
 
-fn updateButtons(cpu: *Cpu) void {
+fn updateButtons(cpu: *Cpu, frames: u64) void {
     const prev_buttons = cpu.p3_buttons;
     var buttons: u8 = 0xFF;
 
-    // Navigation D-Pad (Up, Down, Left, Right)
-    if (rl.isKeyDown(.up) or (if (!azerty_mode) rl.isKeyDown(.w) else rl.isKeyDown(.z))) buttons &= ~@as(u8, 0x01); // Up (P3.0)
-    if (rl.isKeyDown(.down) or rl.isKeyDown(.s)) buttons &= ~@as(u8, 0x02); // Down (P3.1)
-    if (rl.isKeyDown(.left) or (if (!azerty_mode) rl.isKeyDown(.a) else rl.isKeyDown(.q))) buttons &= ~@as(u8, 0x04); // Left (P3.2)
-    if (rl.isKeyDown(.right) or rl.isKeyDown(.d)) buttons &= ~@as(u8, 0x08); // Right (P3.3)
+    // Éviter la fuite de la touche Entrée frappée dans le terminal au démarrage
+    if (frames >= 10) {
+        // Navigation D-Pad (Up, Down, Left, Right)
+        if (rl.isKeyDown(.up) or (if (!azerty_mode) rl.isKeyDown(.w) else rl.isKeyDown(.z))) buttons &= ~@as(u8, 0x01); // Up (P3.0)
+        if (rl.isKeyDown(.down) or rl.isKeyDown(.s)) buttons &= ~@as(u8, 0x02); // Down (P3.1)
+        if (rl.isKeyDown(.left) or (if (!azerty_mode) rl.isKeyDown(.a) else rl.isKeyDown(.q))) buttons &= ~@as(u8, 0x04); // Left (P3.2)
+        if (rl.isKeyDown(.right) or rl.isKeyDown(.d)) buttons &= ~@as(u8, 0x08); // Right (P3.3)
 
-    // Bouton A (Action / Sélection / Confirmation)
-    if (rl.isKeyDown(.enter) or rl.isKeyDown(.space) or rl.isKeyDown(.k) or (if (!azerty_mode) rl.isKeyDown(.z) else rl.isKeyDown(.w))) {
-        buttons &= ~@as(u8, 0x10); // A (P3.4)
+        // Bouton A (Action / Sélection / Confirmation)
+        if (rl.isKeyDown(.enter) or rl.isKeyDown(.space) or rl.isKeyDown(.k) or (if (!azerty_mode) rl.isKeyDown(.z) else rl.isKeyDown(.w))) {
+            buttons &= ~@as(u8, 0x10); // A (P3.4)
+        }
+
+        // Bouton B (Annulation / Retour)
+        if (rl.isKeyDown(.x) or rl.isKeyDown(.b) or rl.isKeyDown(.l) or rl.isKeyDown(.backspace)) {
+            buttons &= ~@as(u8, 0x20); // B (P3.5)
+        }
+
+        // Bouton MODE (P3.6) : bascule entre Horloge / Fichiers / Jeu dans le BIOS
+        if (rl.isKeyDown(.m) or rl.isKeyDown(.tab)) {
+            buttons &= ~@as(u8, 0x40); // MODE (P3.6)
+        }
+
+        // Bouton SLEEP (P3.7) : mise en veille
+        if (rl.isKeyDown(.n)) {
+            buttons &= ~@as(u8, 0x80); // SLEEP (P3.7)
+        }
     }
 
-    // Bouton B (Annulation / Retour)
-    if (rl.isKeyDown(.x) or rl.isKeyDown(.b) or rl.isKeyDown(.l) or rl.isKeyDown(.backspace)) {
-        buttons &= ~@as(u8, 0x20); // B (P3.5)
-    }
-
-    // Bouton MODE (P3.6) : bascule entre Horloge / Fichiers / Jeu dans le BIOS
-    const mode_key_pressed = rl.isKeyPressed(.m) or rl.isKeyPressed(.tab);
-    if (rl.isKeyDown(.m) or rl.isKeyDown(.tab)) {
-        buttons &= ~@as(u8, 0x40); // MODE (P3.6)
-    }
-
-    // Bouton SLEEP (P3.7) : mise en veille
-    if (rl.isKeyDown(.n)) {
-        buttons &= ~@as(u8, 0x80); // SLEEP (P3.7)
-    }
+    const mode_key_pressed = frames >= 10 and (rl.isKeyPressed(.m) or rl.isKeyPressed(.tab));
 
     // Start pulse en jeu (flash0) sur écran titre
-    const title_start_pressed = rl.isKeyPressed(.enter) or rl.isKeyPressed(.space);
+    const title_start_pressed = frames >= 10 and (rl.isKeyPressed(.enter) or rl.isKeyPressed(.space));
     if (cpu.inst_bank.bank_id == .flash0) {
         if (title_start_pressed) {
             buttons &= ~@as(u8, 0x40); // P3.6 = Start pulse
@@ -384,7 +388,8 @@ fn updateButtons(cpu: *Cpu) void {
     }
 
     cpu.p3_buttons = buttons;
-    cpu.ram_bank0[0x70] = buttons;
+    // RAM 0x70 est active-high dans le BIOS VMU (P3 xor 0xFF : 1 = appuyé, 0 = relâché)
+    cpu.ram_bank0[0x70] = buttons ^ 0xFF;
 
     // Log des changements de boutons pour debug
     if (buttons != prev_buttons) {
@@ -419,8 +424,5 @@ fn updateButtons(cpu: *Cpu) void {
 
     cpu.prev_p3_buttons = prev_buttons;
     cpu.sfr_raw[Cpu.SFR_P3INT] = p3int;
-    if (buttons == 0xFF) {
-        cpu.ram_bank0[0x70] = 0xFF;
-    }
 }
 

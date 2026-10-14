@@ -1147,8 +1147,8 @@ test "BIOS boots into menu with P7=0x02" {
     var cpu = makeCpu(&rom);
     @memcpy(&rom, bios_bytes);
     vmu.initVmuFlash(&cpu);
+    vmu.installGame(&cpu, 1024);
     cpu.p3_buttons = 0xFF;
-    cpu.ram_bank0[0x70] = 0xFF;
     vmu.initBiosRtc(&cpu, true, false); // P7 = 0x02, set_time = false
 
     var steps: usize = 0;
@@ -1156,6 +1156,7 @@ test "BIOS boots into menu with P7=0x02" {
         _ = dbg.checkBiosPhase(&cpu);
         _ = step(&cpu);
     }
+    try testing.expect(!cpu.bios_phase_seen[@intFromEnum(Cpu.BiosPhase.bios_game_launch)]);
     try testing.expect(cpu.pc != 0x03AE);
     try testing.expect(cpu.inst_bank.bank_id == .rom);
 
@@ -1164,7 +1165,6 @@ test "BIOS boots into menu with P7=0x02" {
 
     // Press MODE (P3.6 active-low)
     cpu.p3_buttons = 0xFF & ~@as(u8, 0x40);
-    cpu.ram_bank0[0x70] = cpu.p3_buttons;
     cpu.sfr_raw[Cpu.SFR_P3INT] |= Cpu.P3INT_P31INT;
 
     var mode_steps: usize = 0;
@@ -1177,10 +1177,69 @@ test "BIOS boots into menu with P7=0x02" {
 
     // Release MODE
     cpu.p3_buttons = 0xFF;
-    cpu.ram_bank0[0x70] = 0xFF;
     while (mode_steps < 20000) : (mode_steps += 1) {
         _ = step(&cpu);
     }
     const mode2 = cpu.ram_bank0[0x30];
     try testing.expect(mode1 != mode2);
 }
+
+test "BIOS menu stays in menu when game installed and no buttons pressed" {
+    const bios_bytes = @embedFile("roms/bios/vmu_bios_jp.bin");
+    const game_bytes = @embedFile("roms/Metroid.vms");
+    var rom: [65536]u8 = undefined;
+    var cpu = makeCpu(&rom);
+    @memcpy(&rom, bios_bytes);
+    vmu.initVmuFlash(&cpu);
+    const info = vmu.parseVms(game_bytes, null);
+    vmu.installVms(&cpu, info, game_bytes);
+    cpu.p3_buttons = 0xFF;
+    vmu.initBiosRtc(&cpu, true, false);
+
+    var steps: usize = 0;
+    while (steps < 50000) : (steps += 1) {
+        _ = dbg.checkBiosPhase(&cpu);
+        _ = step(&cpu);
+    }
+    // Le BIOS doit rester dans le menu (ROM) et ne pas sauter à 0x03AE (lancement automatique)
+    try testing.expectEqual(cpu.inst_bank.bank_id, .rom);
+    try testing.expect(!cpu.bios_phase_seen[@intFromEnum(Cpu.BiosPhase.bios_game_launch)]);
+    try testing.expectEqual(@as(u8, 0), cpu.ram_bank0[0x30]); // Écran Horloge (Mode 0)
+}
+
+test "BIOS menu launches game when Button A pressed on clock screen" {
+    const bios_bytes = @embedFile("roms/bios/vmu_bios_jp.bin");
+    const game_bytes = @embedFile("roms/Metroid.vms");
+    var rom: [65536]u8 = undefined;
+    var cpu = makeCpu(&rom);
+    @memcpy(&rom, bios_bytes);
+    vmu.initVmuFlash(&cpu);
+    const info = vmu.parseVms(game_bytes, null);
+    vmu.installVms(&cpu, info, game_bytes);
+    cpu.p3_buttons = 0xFF;
+    vmu.initBiosRtc(&cpu, true, false);
+
+    // D'abord faire quelques pas dans le menu
+    var steps: usize = 0;
+    while (steps < 5000) : (steps += 1) {
+        _ = dbg.checkBiosPhase(&cpu);
+        _ = step(&cpu);
+    }
+    try testing.expectEqual(cpu.inst_bank.bank_id, .rom);
+
+    // L'utilisateur appuie sur le bouton A (P3.4 active-low: P3 bit 4 = 0)
+    cpu.p3_buttons = 0xFF & ~@as(u8, 0x10);
+    cpu.sfr_raw[Cpu.SFR_P3INT] |= Cpu.P3INT_P31INT;
+
+    while (steps < 50000) : (steps += 1) {
+        _ = dbg.checkBiosPhase(&cpu);
+        _ = step(&cpu);
+        if (cpu.bios_phase == .bios_game_launch or cpu.inst_bank.bank_id == .flash0) break;
+        if (steps % 1000 == 0) {
+            cpu.sfr_raw[Cpu.SFR_P3INT] |= Cpu.P3INT_P31INT;
+        }
+    }
+    // Doit avoir déclenché la phase de lancement de jeu
+    try testing.expect(cpu.bios_phase_seen[@intFromEnum(Cpu.BiosPhase.bios_game_launch)] or cpu.inst_bank.bank_id == .flash0);
+}
+

@@ -251,7 +251,9 @@ pub fn parseVms(vms_data: []const u8, maybe_vmi_data: ?[]const u8) VmsInfo {
 pub fn installVms(cpu: *Cpu, info: VmsInfo, vms_data: []const u8) void {
     const flash = &cpu.flash;
     const copy_len = @min(vms_data.len, 65536);
-    @memcpy(flash[0..copy_len], vms_data[0..copy_len]);
+    if (flash[0..copy_len].ptr != vms_data[0..copy_len].ptr) {
+        @memcpy(flash[0..copy_len], vms_data[0..copy_len]);
+    }
 
     const dir_base = 253 * 512;
     flash[dir_base + 0x00] = info.file_type;
@@ -339,9 +341,13 @@ pub fn initBiosRtc(cpu: *Cpu, bios_menu_mode: bool, set_time_mode: bool) void {
         cpu.ram_bank0[0x31] = 0xFF;
     }
 
-    // Initialiser les boutons à l'état relâché (active-low = 0xFF)
+    // Initialiser les boutons à l'état relâché (active-low = 0xFF pour P3, active-high = 0x00 pour RAM 0x70)
     cpu.p3_buttons = 0xFF;
-    cpu.ram_bank0[0x70] = 0xFF;
+    // En mode menu, aucun bouton n'est enfoncé (0x00) -> le BIOS reste dans le menu
+    // En mode auto-launch direct, simuler le bouton A (0x10) pour lancer le jeu immédiatement
+    cpu.ram_bank0[0x70] = if (bios_menu_mode) 0x00 else 0x10;
+    cpu.ram_bank0[0x71] = 0x00;
+    cpu.ram_bank0[0x72] = 0x00;
 
     // SFR initialization matching libevmu's EvmuRam_IBehavior_reset_() in evmu_ram.c
     cpu.sfr_raw[Cpu.SFR_PCON] = 0x00; // PCON: disable HALT/HOLD
