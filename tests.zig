@@ -1140,3 +1140,47 @@ test "VMU installVms filesystem integration" {
     try testing.expectEqual(@as(u8, 0xFA), cpu.flash[fat_base + 2 * 2]);
     try testing.expectEqual(@as(u8, 0xFF), cpu.flash[fat_base + 2 * 2 + 1]);
 }
+
+test "BIOS boots into menu with P7=0x02" {
+    const bios_bytes = @embedFile("roms/bios/vmu_bios_jp.bin");
+    var rom: [65536]u8 = undefined;
+    var cpu = makeCpu(&rom);
+    @memcpy(&rom, bios_bytes);
+    vmu.initVmuFlash(&cpu);
+    cpu.p3_buttons = 0xFF;
+    cpu.ram_bank0[0x70] = 0xFF;
+    vmu.initBiosRtc(&cpu, true, false); // P7 = 0x02, set_time = false
+
+    var steps: usize = 0;
+    while (steps < 20000) : (steps += 1) {
+        _ = dbg.checkBiosPhase(&cpu);
+        _ = step(&cpu);
+    }
+    try testing.expect(cpu.pc != 0x03AE);
+    try testing.expect(cpu.inst_bank.bank_id == .rom);
+
+    // Initial mode
+    const mode1 = cpu.ram_bank0[0x30];
+
+    // Press MODE (P3.6 active-low)
+    cpu.p3_buttons = 0xFF & ~@as(u8, 0x40);
+    cpu.ram_bank0[0x70] = cpu.p3_buttons;
+    cpu.sfr_raw[Cpu.SFR_P3INT] |= Cpu.P3INT_P31INT;
+
+    var mode_steps: usize = 0;
+    while (mode_steps < 10000) : (mode_steps += 1) {
+        _ = step(&cpu);
+        if (mode_steps % 1000 == 0) {
+            cpu.sfr_raw[Cpu.SFR_P3INT] |= Cpu.P3INT_P31INT;
+        }
+    }
+
+    // Release MODE
+    cpu.p3_buttons = 0xFF;
+    cpu.ram_bank0[0x70] = 0xFF;
+    while (mode_steps < 20000) : (mode_steps += 1) {
+        _ = step(&cpu);
+    }
+    const mode2 = cpu.ram_bank0[0x30];
+    try testing.expect(mode1 != mode2);
+}

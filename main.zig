@@ -29,12 +29,17 @@ pub fn main(init: std.process.Init) !void {
     // Standalone par défaut (comme DreamPotato et le vrai VMU) : l'horloge est
     // pilotée par l'OCR (quartz ≈ 5 kHz en jeu). --docked force le mode Dreamcast 6 MHz.
     var standalone_mode: bool = true;
+    var bios_menu_requested: bool = false;
+    var set_time_requested: bool = false;
 
     while (arg_iter.next()) |arg| {
         if (std.mem.eql(u8, arg, "--azerty")) {
             azerty_mode = true;
-        } else if (std.mem.eql(u8, arg, "--bios-menu")) {
-            // BIOS menu mode flag (kept for CLI compatibility)
+        } else if (std.mem.eql(u8, arg, "--bios-menu") or std.mem.eql(u8, arg, "-m")) {
+            bios_menu_requested = true;
+        } else if (std.mem.eql(u8, arg, "--set-time")) {
+            set_time_requested = true;
+            bios_menu_requested = true;
         } else if (std.mem.eql(u8, arg, "--standalone")) {
             standalone_mode = true;
         } else if (std.mem.eql(u8, arg, "--docked")) {
@@ -50,16 +55,24 @@ pub fn main(init: std.process.Init) !void {
         }
     }
 
-    _ = path_a orelse {
-        std.debug.print("Usage: lc86K [<bios.bin>] <game.vms> [--azerty] [--bios-menu] [--docked]\n", .{});
-        return;
-    };
+    var bios_path: []const u8 = "roms/bios/vmu_bios_jp.bin";
+    var game_path: ?[]const u8 = null;
 
-    const use_bios_menu: bool = path_b != null;
+    if (path_a) |pa| {
+        if (path_b) |pb| {
+            bios_path = pa;
+            game_path = pb;
+        } else {
+            if (std.mem.endsWith(u8, pa, ".bin") or std.mem.endsWith(u8, pa, ".BIN")) {
+                bios_path = pa;
+                game_path = null;
+            } else {
+                game_path = pa;
+            }
+        }
+    }
 
-    // 2 files: first=BIOS, second=game | 1 file: game only, BIOS auto-detected
-    const bios_path: []const u8 = if (path_b != null) path_a.? else "roms/bios/vmu_bios_jp.bin";
-    const game_path: []const u8 = if (path_b) |b| b else path_a.?;
+    const use_bios_menu: bool = bios_menu_requested or (game_path == null);
 
     const dir = std.Io.Dir.cwd();
 
@@ -79,40 +92,44 @@ pub fn main(init: std.process.Init) !void {
     // Initialize a proper VMU flash filesystem (same approach as DreamPotato)
     vmu.initVmuFlash(&cpu);
 
-    // Load game into flash block 0 (inside the filesystem)
-    const game_file = try dir.openFile(init.io, game_path, .{});
-    defer game_file.close(init.io);
+    if (game_path) |gp| {
+        // Load game into flash block 0 (inside the filesystem)
+        const game_file = try dir.openFile(init.io, gp, .{});
+        defer game_file.close(init.io);
 
-    const game_buf = try init.arena.allocator().alloc(u8, 65536);
-    const game_size = try game_file.readPositionalAll(init.io, game_buf, 0);
+        const game_buf = try init.arena.allocator().alloc(u8, 65536);
+        const game_size = try game_file.readPositionalAll(init.io, game_buf, 0);
 
-    // Détection d'un fichier .vmi compagnon adjacent
-    var maybe_vmi_data: ?[]const u8 = null;
-    if (std.mem.endsWith(u8, game_path, ".vms") or std.mem.endsWith(u8, game_path, ".VMS")) {
-        const vmi_path = try std.fmt.allocPrint(init.arena.allocator(), "{s}.vmi", .{game_path[0 .. game_path.len - 4]});
-        if (dir.openFile(init.io, vmi_path, .{})) |vmi_file| {
-            defer vmi_file.close(init.io);
-            const vmi_buf = try init.arena.allocator().alloc(u8, 256);
-            const vmi_read = try vmi_file.readPositionalAll(init.io, vmi_buf, 0);
-            maybe_vmi_data = vmi_buf[0..vmi_read];
-            std.debug.print("VMI: {s} ({d} bytes)\n", .{ vmi_path, vmi_read });
-        } else |_| {}
+        // Détection d'un fichier .vmi compagnon adjacent
+        var maybe_vmi_data: ?[]const u8 = null;
+        if (std.mem.endsWith(u8, gp, ".vms") or std.mem.endsWith(u8, gp, ".VMS")) {
+            const vmi_path = try std.fmt.allocPrint(init.arena.allocator(), "{s}.vmi", .{gp[0 .. gp.len - 4]});
+            if (dir.openFile(init.io, vmi_path, .{})) |vmi_file| {
+                defer vmi_file.close(init.io);
+                const vmi_buf = try init.arena.allocator().alloc(u8, 256);
+                const vmi_read = try vmi_file.readPositionalAll(init.io, vmi_buf, 0);
+                maybe_vmi_data = vmi_buf[0..vmi_read];
+                std.debug.print("VMI: {s} ({d} bytes)\n", .{ vmi_path, vmi_read });
+            } else |_| {}
+        }
+
+        const vms_info = vmu.parseVms(game_buf[0..game_size], maybe_vmi_data);
+        vmu.installVms(&cpu, vms_info, game_buf[0..game_size]);
+        std.debug.print("Game: {s} ({d} bytes, {d} blocks, type=0x{X:0>2}, name='{s}')\n", .{
+            gp,
+            game_size,
+            vms_info.size_blocks,
+            vms_info.file_type,
+            vms_info.filename,
+        });
+    } else {
+        std.debug.print("Mode VMU autonome sans jeu : menu BIOS interactif actif\n", .{});
     }
-
-    const vms_info = vmu.parseVms(game_buf[0..game_size], maybe_vmi_data);
-    vmu.installVms(&cpu, vms_info, game_buf[0..game_size]);
-    std.debug.print("Game: {s} ({d} bytes, {d} blocks, type=0x{X:0>2}, name='{s}')\n", .{
-        game_path,
-        game_size,
-        vms_info.size_blocks,
-        vms_info.file_type,
-        vms_info.filename,
-    });
 
     cpu.reset();
 
     // Initialize BIOS RTC (same as DreamPotato's InitializeRTCDate)
-    vmu.initBiosRtc(&cpu, use_bios_menu);
+    vmu.initBiosRtc(&cpu, use_bios_menu, set_time_requested);
 
     if (use_bios_menu) {
         std.debug.print("BIOS menu mode enabled: P7=0x{X:0>2} (non-standalone => BIOS file menu path)\n", .{ cpu.sfr_raw[Cpu.SFR_P7] });
@@ -143,6 +160,17 @@ pub fn main(init: std.process.Init) !void {
     while (!rl.windowShouldClose()) {
         // Poll input events BEFORE reading key state, so isKeyDown reflects current frame
         rl.pollInputEvents();
+
+        // Raccourci Soft-reset vers le menu BIOS officiel (Échap ou F1)
+        if (rl.isKeyPressed(.escape) or rl.isKeyPressed(.f1)) {
+            cpu.setInstructionBank(.rom);
+            cpu.reset();
+            vmu.initBiosRtc(&cpu, true, false);
+            game_started = false;
+            start_pulse_frames = 0;
+            std.debug.print("[BIOS] Reset vers le menu BIOS officiel\n", .{});
+        }
+
         updateButtons(&cpu);
 
         const cycles_per_frame: u64 = cpu.cpu_freq / 60;
@@ -184,15 +212,19 @@ pub fn main(init: std.process.Init) !void {
         }
 
         if (!game_started and cpu.bios_phase == .bios_game_launch) {
-            // Clear P3 latch before game starts
-            cpu.p3_buttons = 0xFF;
-            cpu.prev_p3_buttons = 0xFF;
-            cpu.ram_bank0[0x70] = 0xFF;
-            cpu.sfr_raw[Cpu.SFR_P3INT] = 0xFD;
-            cpu.setInstructionBank(.flash0);
-            cpu.pc = 0x0000;
-            game_started = true;
-            start_pulse_frames = 0;
+            // Lancement automatique direct, ou lancement manuel depuis le menu BIOS sur appui du bouton A
+            const a_pressed = rl.isKeyDown(.enter) or rl.isKeyDown(.space) or rl.isKeyDown(.k) or (if (!azerty_mode) rl.isKeyDown(.z) else rl.isKeyDown(.w));
+            if (!use_bios_menu or a_pressed) {
+                // Clear P3 latch before game starts
+                cpu.p3_buttons = 0xFF;
+                cpu.prev_p3_buttons = 0xFF;
+                cpu.ram_bank0[0x70] = 0xFF;
+                cpu.sfr_raw[Cpu.SFR_P3INT] = 0xFD;
+                cpu.setInstructionBank(.flash0);
+                cpu.pc = 0x0000;
+                game_started = true;
+                start_pulse_frames = 0;
+            }
         }
 
         // Rapport périodique (1/s) : état clé pour le diagnostic runtime
@@ -237,9 +269,9 @@ pub fn main(init: std.process.Init) !void {
                 .bios_lcd_setup => "lcd_setup",
                 .bios_date_ok => "date_ok",
                 .bios_main_loop => "main_loop",
-                .bios_mode_0 => "mode_0",
-                .bios_mode_1 => "mode_1",
-                .bios_mode_2 => "mode_2",
+                .bios_mode_0 => "mode_0 [Fichiers]",
+                .bios_mode_1 => "mode_1 [Jeu]",
+                .bios_mode_2 => "mode_2 [Horloge]",
                 .bios_game_launch => "game_launch",
                 .bios_no_game => "no_game",
                 .game_running => "game_running",
@@ -312,43 +344,36 @@ fn updateButtons(cpu: *Cpu) void {
     const prev_buttons = cpu.p3_buttons;
     var buttons: u8 = 0xFF;
 
-    const bios_launch_window = cpu.bios_phase == .bios_mode_0 or
-        cpu.bios_phase == .bios_mode_1 or
-        cpu.bios_phase == .bios_mode_2 or
-        cpu.bios_phase == .bios_game_launch or
-        (cpu.pc >= 0xE120 and cpu.pc <= 0xE1A0);
+    // Navigation D-Pad (Up, Down, Left, Right)
+    if (rl.isKeyDown(.up) or (if (!azerty_mode) rl.isKeyDown(.w) else rl.isKeyDown(.z))) buttons &= ~@as(u8, 0x01); // Up (P3.0)
+    if (rl.isKeyDown(.down) or rl.isKeyDown(.s)) buttons &= ~@as(u8, 0x02); // Down (P3.1)
+    if (rl.isKeyDown(.left) or (if (!azerty_mode) rl.isKeyDown(.a) else rl.isKeyDown(.q))) buttons &= ~@as(u8, 0x04); // Left (P3.2)
+    if (rl.isKeyDown(.right) or rl.isKeyDown(.d)) buttons &= ~@as(u8, 0x08); // Right (P3.3)
 
-    const mode_key_pressed = rl.isKeyPressed(.m);
-    const title_start_pressed = rl.isKeyPressed(.enter) or rl.isKeyPressed(.space);
-    if (bios_launch_window) {
-        // Menu BIOS : navigation (Up/Down) + sélection (A) + MODE
-        if (rl.isKeyDown(.up) or rl.isKeyDown(.w)) buttons &= ~@as(u8, 0x01); // Up
-        if (rl.isKeyDown(.down) or rl.isKeyDown(.s)) buttons &= ~@as(u8, 0x02); // Down
-        if (rl.isKeyDown(.z) or rl.isKeyDown(.k)) buttons &= ~@as(u8, 0x10); // A
-        if (mode_key_pressed) {
-            buttons &= ~@as(u8, 0x40); // P3.6 = MODE button
-        }
-    } else if (azerty_mode) {
-        // AZERTY: keep movement on classic arrow/d-pad keys and buttons on dedicated action keys.
-        if (rl.isKeyDown(.up) or rl.isKeyDown(.w)) buttons &= ~@as(u8, 0x01); // Up
-        if (rl.isKeyDown(.down) or rl.isKeyDown(.s)) buttons &= ~@as(u8, 0x02); // Down
-        if (rl.isKeyDown(.left) or rl.isKeyDown(.a)) buttons &= ~@as(u8, 0x04); // Left
-        if (rl.isKeyDown(.right) or rl.isKeyDown(.d)) buttons &= ~@as(u8, 0x08); // Right
-        if (rl.isKeyDown(.q) or rl.isKeyDown(.z)) buttons &= ~@as(u8, 0x10); // A
-        if (rl.isKeyDown(.b) or rl.isKeyDown(.x)) buttons &= ~@as(u8, 0x20); // B
-    } else {
-        // Standard mapping: movement on arrows/WASD, action buttons on Z/X.
-        if (rl.isKeyDown(.up) or rl.isKeyDown(.w)) buttons &= ~@as(u8, 0x01); // Up
-        if (rl.isKeyDown(.down) or rl.isKeyDown(.s)) buttons &= ~@as(u8, 0x02); // Down
-        if (rl.isKeyDown(.left) or rl.isKeyDown(.a)) buttons &= ~@as(u8, 0x04); // Left
-        if (rl.isKeyDown(.right) or rl.isKeyDown(.d)) buttons &= ~@as(u8, 0x08); // Right
-        if (rl.isKeyDown(.z) or rl.isKeyDown(.k)) buttons &= ~@as(u8, 0x10); // A
-        if (rl.isKeyDown(.x) or rl.isKeyDown(.l)) buttons &= ~@as(u8, 0x20); // B
+    // Bouton A (Action / Sélection / Confirmation)
+    if (rl.isKeyDown(.enter) or rl.isKeyDown(.space) or rl.isKeyDown(.k) or (if (!azerty_mode) rl.isKeyDown(.z) else rl.isKeyDown(.w))) {
+        buttons &= ~@as(u8, 0x10); // A (P3.4)
     }
 
-    // Title screen Start is a distinct press edge. Never auto-send Start when the game is
-    // just booting into flash0; otherwise the title screen is skipped.
-    if (!bios_launch_window and cpu.inst_bank.bank_id == .flash0) {
+    // Bouton B (Annulation / Retour)
+    if (rl.isKeyDown(.x) or rl.isKeyDown(.b) or rl.isKeyDown(.l) or rl.isKeyDown(.backspace)) {
+        buttons &= ~@as(u8, 0x20); // B (P3.5)
+    }
+
+    // Bouton MODE (P3.6) : bascule entre Horloge / Fichiers / Jeu dans le BIOS
+    const mode_key_pressed = rl.isKeyPressed(.m) or rl.isKeyPressed(.tab);
+    if (rl.isKeyDown(.m) or rl.isKeyDown(.tab)) {
+        buttons &= ~@as(u8, 0x40); // MODE (P3.6)
+    }
+
+    // Bouton SLEEP (P3.7) : mise en veille
+    if (rl.isKeyDown(.n)) {
+        buttons &= ~@as(u8, 0x80); // SLEEP (P3.7)
+    }
+
+    // Start pulse en jeu (flash0) sur écran titre
+    const title_start_pressed = rl.isKeyPressed(.enter) or rl.isKeyPressed(.space);
+    if (cpu.inst_bank.bank_id == .flash0) {
         if (title_start_pressed) {
             buttons &= ~@as(u8, 0x40); // P3.6 = Start pulse
             start_pulse_frames = 1;
@@ -357,29 +382,22 @@ fn updateButtons(cpu: *Cpu) void {
             start_pulse_frames -= 1;
         }
     }
-    if (!bios_launch_window and cpu.inst_bank.bank_id == .rom and rl.isKeyDown(.n)) buttons &= ~@as(u8, 0x80); // P3.7 = Sleep only in BIOS
 
     cpu.p3_buttons = buttons;
     cpu.ram_bank0[0x70] = buttons;
 
     // Log des changements de boutons pour debug
     if (buttons != prev_buttons) {
-        std.debug.print("P3 buttons: 0x{X:0>2} -> 0x{X:0>2} (prev=0x{X:0>2}) bios={s} p3int=0x{X:0>2}\n", .{
-            prev_buttons, buttons, prev_buttons,
-            if (bios_launch_window) "YES" else "no",
-            cpu.sfr_raw[Cpu.SFR_P3INT],
+        std.debug.print("P3 buttons: 0x{X:0>2} -> 0x{X:0>2} (prev=0x{X:0>2}) p3int=0x{X:0>2}\n", .{
+            prev_buttons, buttons, prev_buttons, cpu.sfr_raw[Cpu.SFR_P3INT],
         });
     }
 
-    // Match the BIOS harness: during the launch menu, a held MODE state must assert
-    // P31INT directly so the ROM launch wrapper can continue.
     var p3int = cpu.sfr_raw[Cpu.SFR_P3INT]; // P3INT
     const p30int = p3int & Cpu.P3INT_P30INT != 0; // P30INT: enable interrupt
     const p32int = p3int & Cpu.P3INT_P32INT != 0; // P32INT: 1=continuous, 0=edge
     const any_pressed = buttons != 0xFF;
     const any_just_pressed = (prev_buttons & buttons) != prev_buttons; // fronts montants (0→1 = appui)
-    // MODE is a single valid edge pulse during BIOS launch
-    const force_bios_mode_int = bios_launch_window and mode_key_pressed;
 
     if (p30int) {
         if (p32int) {
@@ -391,19 +409,15 @@ fn updateButtons(cpu: *Cpu) void {
             }
         } else {
             // Mode edge : P31INT posé sur front montant (appui), pas d'effacement auto.
-            if (any_just_pressed or force_bios_mode_int) {
+            if (any_just_pressed or mode_key_pressed) {
                 p3int |= Cpu.P3INT_P31INT;
             }
-            // P31INT est effacé par l'ISR (lc86K.zig) ou par écriture logicielle.
         }
     } else {
         p3int &= ~Cpu.P3INT_P31INT;
     }
 
-    // prev_p3_buttons must be set AFTER edge detection so the next frame
-    // can compare against the previous physical button state.
     cpu.prev_p3_buttons = prev_buttons;
-
     cpu.sfr_raw[Cpu.SFR_P3INT] = p3int;
     if (buttons == 0xFF) {
         cpu.ram_bank0[0x70] = 0xFF;

@@ -309,29 +309,39 @@ pub fn installGame(cpu: *Cpu, game_size: usize) void {
 /// Initialize BIOS date and SFRs to match libevmu's EvmuRam_IBehavior_reset_().
 /// Sets PC to 0x2E1 to skip the Dreamcast serial date query (we don't emulate the serial link).
 /// Writes date to RAM and configures SFRs the BIOS expects at startup.
-pub fn initBiosRtc(cpu: *Cpu, bios_menu_mode: bool) void {
-    // Jump past the BIOS serial date-query code (no Dreamcast serial emulation)
-    cpu.pc = 0x2E1;
-    // Write current date to RAM bank 0 (BCD format + binary)
-    // Same addresses as EvmuRom_setDateTime() in evmu_rom.c
-    cpu.ram_bank0[0x10] = 0x20; // Century BCD (20)
-    cpu.ram_bank0[0x11] = 0x26; // Year BCD (26)
-    cpu.ram_bank0[0x12] = 0x07; // Month BCD (07)
-    cpu.ram_bank0[0x13] = 0x17; // Day BCD (17)
-    cpu.ram_bank0[0x14] = 0x12; // Hour BCD (12)
-    cpu.ram_bank0[0x15] = 0x30; // Minute BCD (30)
-    cpu.ram_bank0[0x16] = 0x00; // Second BCD (00)
-    cpu.ram_bank0[0x17] = 0x00; // Year MSB
-    cpu.ram_bank0[0x18] = 0x07; // Year LSB (2026 = 0x07EA)
-    cpu.ram_bank0[0x19] = 0x07; // Month (binary)
-    cpu.ram_bank0[0x1A] = 0x17; // Day (binary)
-    cpu.ram_bank0[0x1B] = 0x12; // Hour (binary)
-    cpu.ram_bank0[0x1C] = 0x30; // Minute (binary)
-    cpu.ram_bank0[0x1D] = 0x00; // Second (binary)
-    cpu.ram_bank0[0x1E] = 0; // HalfSecond
-    cpu.ram_bank0[0x1F] = 0; // LeapYear
-    // DateTime_DateSet at 0x31 = 0xFF means "date is set" (evmu_address_space.h)
-    cpu.ram_bank0[0x31] = 0xFF;
+pub fn initBiosRtc(cpu: *Cpu, bios_menu_mode: bool, set_time_mode: bool) void {
+    if (set_time_mode) {
+        // Démarre à l'entrée de la configuration manuelle de la date du BIOS (0x02AF)
+        cpu.pc = 0x02AF;
+        cpu.ram_bank0[0x31] = 0x00; // 0x00 = date non configurée -> affiche l'écran de réglage officiel
+    } else {
+        // Jump past the BIOS serial date-query code (no Dreamcast serial emulation)
+        cpu.pc = 0x2E1;
+        // Write current date to RAM bank 0 (BCD format + binary)
+        // Same addresses as EvmuRom_setDateTime() in evmu_rom.c
+        cpu.ram_bank0[0x10] = 0x20; // Century BCD (20)
+        cpu.ram_bank0[0x11] = 0x26; // Year BCD (26)
+        cpu.ram_bank0[0x12] = 0x07; // Month BCD (07)
+        cpu.ram_bank0[0x13] = 0x17; // Day BCD (17)
+        cpu.ram_bank0[0x14] = 0x12; // Hour BCD (12)
+        cpu.ram_bank0[0x15] = 0x30; // Minute BCD (30)
+        cpu.ram_bank0[0x16] = 0x00; // Second BCD (00)
+        cpu.ram_bank0[0x17] = 0x00; // Year MSB
+        cpu.ram_bank0[0x18] = 0x07; // Year LSB (2026 = 0x07EA)
+        cpu.ram_bank0[0x19] = 0x07; // Month (binary)
+        cpu.ram_bank0[0x1A] = 0x17; // Day (binary)
+        cpu.ram_bank0[0x1B] = 0x12; // Hour (binary)
+        cpu.ram_bank0[0x1C] = 0x30; // Minute (binary)
+        cpu.ram_bank0[0x1D] = 0x00; // Second (binary)
+        cpu.ram_bank0[0x1E] = 0; // HalfSecond
+        cpu.ram_bank0[0x1F] = 0; // LeapYear
+        // DateTime_DateSet at 0x31 = 0xFF means "date is set" (evmu_address_space.h)
+        cpu.ram_bank0[0x31] = 0xFF;
+    }
+
+    // Initialiser les boutons à l'état relâché (active-low = 0xFF)
+    cpu.p3_buttons = 0xFF;
+    cpu.ram_bank0[0x70] = 0xFF;
 
     // SFR initialization matching libevmu's EvmuRam_IBehavior_reset_() in evmu_ram.c
     cpu.sfr_raw[Cpu.SFR_PCON] = 0x00; // PCON: disable HALT/HOLD

@@ -28,58 +28,60 @@
 ## Utilisation
 
 ```
-zig build run -- <game.vms> [options]
+zig build run -- [<game.vms>] [options]
 ```
 
 | Option | Effet |
 |--------|-------|
-| `<bios.bin> <game.vms>` | Fournir un BIOS explicite (sinon `roms/bios/` auto-détecté) |
-| `--standalone` | Mode par défaut : horloge pilote par OCR (quartz), comme DreamPotato |
+| `[<game.vms>]` | Jeu à charger en Flash (optionnel : sans jeu, la VMU démarre en mode autonome BIOS) |
+| `<bios.bin> <game.vms>` | Fournir un BIOS explicite (sinon `roms/bios/vmu_bios_jp.bin` auto-détecté) |
+| `--bios-menu` / `-m` | Forcer le démarrage dans le menu BIOS officiel même si un jeu est chargé |
+| `--set-time` | Démarrer sur l'écran officiel de configuration de l'horloge et de la date du BIOS |
+| `--standalone` | Mode par défaut : horloge pilotée par OCR (quartz), comme le vrai matériel |
 | `--docked` | Mode Dreamcast : 6 MHz horloge externe |
-| `--azerty` | Mapping clavier AZERTY (A/B sur Q/Z/X) |
-| `--bios-menu` | Activer le chemin menu BIOS (P7=0x02, non-standalone) |
+| `--azerty` | Mapping clavier AZERTY (ZSQD pour le D-pad, W/X pour A/B) |
 | `--trace` | Trace des SFR et lectures P3 sur stderr |
 
 ### Contrôles
 
-- **Flèches / WASD** : D-pad
-- **Z/X (QWERTY) ou Q/Z (AZERTY)** : boutons A / B
-- **Entrée / Espace** : Start (pulse sur écran titre)
-- **M** : MODE (menu BIOS)
-- **N** : Sleep (P3.7, en BIOS uniquement)
+- **Flèches / WASD (QWERTY) / ZSQD (AZERTY)** : D-pad (navigation menus et jeux)
+- **Entrée / Espace / Z (QWERTY) / W (AZERTY) / K** : Bouton A (validation / action)
+- **X / Backspace / L** : Bouton B (annulation / retour)
+- **M / Tab** : Bouton MODE (basculer entre Horloge, Fichiers et Jeu dans le BIOS)
+- **N** : Bouton Sleep (P3.7)
+- **Échap / F1** : Soft-reset immédiat vers le menu BIOS officiel
 
 ## État actuel
 
 ### Fait
 - [x] CPU LC86K87 : ISA structurée et complète, validée par tests VMC
-- [x] Boot BIOS + RTC + phases jusqu'au lancement du jeu (`bios_game_launch`)
-- [x] Bascule de banque d'instructions via registre **EXT** (modèle `Ext0`/`Ext3`,
-  corrigé et validé sur DreamPotato) — les appels BIOS GHEAD passent bien en ROM
-- [x] Lancement réel du jeu en flash0 (PC=0x0000, banque committée)
-- [x] Filesystem VMU / flash / FAT8 + installation d'un jeu
-- [x] Rendu LCD 48×32 raylib (MCR bit3 + VCCR bit7 gated) + bande icônes
-- [x] Boutons P3 : active-low, fronts, IRQ (bord + continu), menu BIOS
-- [x] Interruptions : P3, timers, HALT/wake-up, priorités, RETI + restauration bank
+- [x] Boot BIOS officiel, détection des phases et menu interactif
+- [x] Navigation BIOS complète : Horloge temps réel, Gestionnaire de fichiers, écran réglage date
+- [x] Émulation Audio PWM Buzzer via Timer 1 et flux Raylib
+- [x] Bascule de banque d'instructions via registre **EXT** (`Ext0`/`Ext3`)
+- [x] Lancement réel du jeu en flash0 depuis le BIOS ou en auto-boot
+- [x] Filesystem VMU / flash / FAT8 + parseur d'en-tête VMS / VMI officiel
+- [x] Rendu LCD 48×32 raylib avec défilement STAD et colonnes mortes XRAM
+- [x] Boutons P3 complets (active-low, D-pad, A, B, MODE, Sleep) + reset BIOS
 - [x] Modes d'horloge OCR / ISL : 6 MHz (docked) vs quartz (standalone)
-- [x] Tests : `zig build test` → **54/54** passent
+- [x] Tests : `zig build test` → **100/100** passent
 
 ## TODO
 
 ### P0 — comportement réel
-- [ ] Valider l'expérience de jeu complète sur un titre réel (état : Tetris tourne,
-      les titres GHEAD/BIOS-call démarrent après le correctif EXT)
-- [ ] Cas limites MENU/START/MODE sur BIOS et écran titre
+- [ ] Valider l'expérience de jeu complète sur les titres à sauvegarde (Shenmue, etc.)
+- [ ] Persistance de l'image Flash sur disque à la fermeture
 
 ### P1 — périphériques
-- [ ] I/O Ports P1 / P7 (états connexion, modes d'entrée)
-- [ ] Maple MPLSW, MPLSTA, MPLRST
-- [ ] Série SCON0/1, SBUF0/1, SBR
-- [ ] Work RAM VRMAD, VTRBF
+- [ ] Contrôleur d'interruptions hiérarchique avec registre `IP` (priorités Low/High)
+- [ ] I/O Ports P1 / P3 : distinction Read-Latch vs Read-Pin sur instructions RMW
+- [ ] Maple MPLSW, MPLSTA, MPLRST (communication bus Dreamcast)
+- [ ] Série SCON0/1, SBUF0/1, SBR (VMU-to-VMU)
 
 ### P2 — simulation avancée
-- [ ] PWM son via Timer 1
-- [ ] Filesystem FAT8 — import/export VMS
-- [ ] Compatibilité élargie aux ROM/jeux VMU
+- [x] PWM son via Timer 1
+- [x] Filesystem FAT8 — parseur VMS / VMI
+- [ ] Rendu LCD avec contraste VCCR et rémanence physique (ghosting)
 
 ### P3 — qualité / entretien
 - [ ] Nettoyer et documenter les points hérités
