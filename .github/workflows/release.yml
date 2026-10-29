@@ -1,0 +1,137 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Release tag (e.g. v1.0.0-alpha)'
+        required: true
+        default: 'v1.0.0-alpha'
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-windows
+            artifact_name: lc86K-windows-x86_64.zip
+            binary_name: lc86K.exe
+          - os: ubuntu-latest
+            target: x86_64-linux
+            artifact_name: lc86K-linux-x86_64.tar.gz
+            binary_name: lc86K
+          - os: macos-latest
+            target: aarch64-macos
+            artifact_name: lc86K-macos-arm64.tar.gz
+            binary_name: lc86K
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libx11-dev libxcursor-dev libxrandr-dev libxinerama-dev libxi-dev libgl1-mesa-dev libasound2-dev
+
+      - name: Setup Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+
+      - name: Verify Zig version
+        run: zig version
+
+      - name: Run test suite
+        run: zig build test
+
+      - name: Build release binary
+        run: zig build -Doptimize=ReleaseFast
+
+      - name: Package release (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path "package" | Out-Null
+          Copy-Item "zig-out/bin/${{ matrix.binary_name }}" -Destination "package/"
+          Copy-Item -Path "roms" -Destination "package/roms" -Recurse
+          Copy-Item "README.md" -Destination "package/"
+          Compress-Archive -Path "package/*" -DestinationPath "${{ matrix.artifact_name }}"
+
+      - name: Package release (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          mkdir -p package/roms
+          cp "zig-out/bin/${{ matrix.binary_name }}" package/
+          cp -r roms/* package/roms/
+          cp README.md package/
+          tar -czvf "${{ matrix.artifact_name }}" -C package .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.artifact_name }}
+
+  publish-release:
+    name: Publish GitHub Release
+    needs: build-release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Determine tag
+        id: get_tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=${{ github.event.inputs.tag_name }}" >> $GITHUB_OUTPUT
+          else
+            echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.get_tag.outputs.tag }}
+          name: LC86000 ${{ steps.get_tag.outputs.tag }}
+          draft: false
+          prerelease: true
+          files: release-assets/*
+          body: |
+            ## LC86000 VMU Emulator - ${{ steps.get_tag.outputs.tag }}
+
+            ### Nouveautés & Corrections
+            - 🎮 Support complet du lancement de jeux VMU officiels (Chao Adventure, Alien Fighter, Metroid, etc.)
+            - 🖥️ Correction de l'adressage indirect `@Rj` en RAM Bank 1 pour l'affichage graphique LCD XRAM
+            - ⏱️ Gestion fidèle des drapeaux d'interruption matériels (Timer 0H, Base Timer, etc.)
+            - 💾 Auto-incrémentation et synchronisation des registres Work RAM VRMAD1/VRMAD2
+            - 🕒 Menu BIOS interactif complet (Horloge, Gestionnaire de fichiers, Réglage de date)
+            - 🔊 Émulation sonore du Buzzer PWM via Timer 1
+
+            ### Téléchargements
+            - **Windows (x86_64)** : `lc86K-windows-x86_64.zip`
+            - **Linux (x86_64)** : `lc86K-linux-x86_64.tar.gz`
+            - **macOS (Apple Silicon)** : `lc86K-macos-arm64.tar.gz`
+
+            Chaque archive inclut l'exécutable, le BIOS officiel et une collection de roms de test.
+
+            ### Captures d'écran
+            <!-- Ajoutez vos captures d'écran ici -->
