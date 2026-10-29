@@ -144,9 +144,9 @@ pub const VmsInfo = struct {
     filename: [12]u8 = "GAME        ".*,
     size_blocks: u16 = 0,
     header_offset: u16 = 1, // 1 for Game, 0 for Data
-    vmu_desc: [16]u8 = [_]u8{' '} ** 16,
-    dc_desc: [32]u8 = [_]u8{' '} ** 32,
-    app_id: [16]u8 = [_]u8{' '} ** 16,
+    vmu_desc: [16]u8 = @splat(' '),
+    dc_desc: [32]u8 = @splat(' '),
+    app_id: [16]u8 = @splat(' '),
     icon_count: u16 = 1,
 };
 
