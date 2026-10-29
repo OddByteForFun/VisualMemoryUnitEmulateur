@@ -1,4 +1,4 @@
-# LC86000
+# VisualMemoryUnitEmulateur
 
 Émulateur du microcontrôleur **Sanyo LC86K87** (processeur 8-bit du Visual Memory Unit / VMU de la Sega Dreamcast), écrit en **Zig 0.16** avec rendu graphique et audio via **Raylib**.
 
