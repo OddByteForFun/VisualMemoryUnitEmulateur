@@ -107,12 +107,27 @@ Tous les tests unitaires (68/68) doivent passer sans avertissement.
 
 ---
 
+## 📸 Visuels & Captures d'écran
+
+### *Metroid*
+
+| Écran titre | En jeu |
+|:---:|:---:|
+| ![Metroid - Écran titre](assets/metroid1.png) | ![Metroid - En jeu](assets/metroid2.png) |
+
+### *Chao Adventure* (Sonic Adventure)
+
+| Écran d'accueil | En jeu |
+|:---:|:---:|
+| ![Chao Adventure - Écran d'accueil](assets/chaos21.png) | ![Chao Adventure - En jeu](assets/chaos22.png) |
+
+---
+
 ## 📦 Intégration Continue & Releases
 
 Le projet dispose de deux workflows GitHub Actions dans `.github/workflows/` :
 - **CI (`ci.yml`)** : Exécute `zig build test` et `zig build -Doptimize=ReleaseFast` sur **Ubuntu**, **Windows** et **macOS** à chaque push ou pull request.
-- **Release (`release.yml`)** : Déclenché lors de la création d'un tag (ex. `v1.0.0-alpha`) ou manuellement via `workflow_dispatch`. Génère automatiquement les archives multiplateformes prêtes à l'emploi avec l'exécutable, le dossier `roms/` et la documentation.
-
+- **Release (`release.yml`)** : Déclenché lors de la création d'un tag (ex. `v1.0.0-alpha`) ou manuellement via `workflow_dispatch`. Génère automatiquement les archives multiplateformes prêtes à l'emploi avec l'exécutable, le dossier `roms/` et la documentation. 
 ---
 
 ## 📚 Documentation technique de référence
