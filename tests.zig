@@ -754,10 +754,10 @@ test "VMC-197 JMPF example 1" {
     try testing.expectEqual(@as(u16, 0xF0E), cpu.pc);
 }
 
-test "EXT 0x88 selects flash0 bank" {
+test "EXT 0x89 selects flash0 bank" {
     var rom: [65536]u8 = undefined;
     var cpu = makeCpu(&rom);
-    cpu.pending_ext = 0x88;
+    cpu.pending_ext = 0x89;
     cpu.syncInstructionBank();
     try testing.expect(cpu.inst_bank.bank_id == .flash0);
     try testing.expect(cpu.inst_bank.data.len == 65536);
@@ -1050,7 +1050,7 @@ test "CALLF commits pending bank switch" {
     var rom: [65536]u8 = undefined;
     var cpu = makeCpu(&rom);
     rom[0] = 0x20; rom[1] = 0x01; rom[2] = 0x00; // CALLF 0x0100
-    cpu.pending_ext = 0x88; // Flash0 switch requested
+    cpu.pending_ext = 0x89; // Flash0 switch requested
     _ = step(&cpu);
     try testing.expectEqual(@as(u16, 0x0100), cpu.pc);
     try testing.expectEqual(cpu.inst_bank.bank_id, .flash0);
@@ -1418,3 +1418,166 @@ test "BIOS menu mode cycling and selection" {
     try testing.expectEqual(@as(u8, 0), cpu.ram_bank0[0x30]);
 }
 
+
+test "ChaoAdventure launches and updates screen" {
+    const bios_bytes = @embedFile("roms/bios/vmu_bios_jp.bin");
+    const game_bytes = @embedFile("roms/ChaoAdventure.vms");
+    const vmi_bytes = @embedFile("roms/ChaoAdventure.vmi");
+
+    var rom: [65536]u8 = undefined;
+    var cpu = makeCpu(&rom);
+    cpu.dreamcast_connected = false;
+    cpu.updateClock();
+    @memcpy(&rom, bios_bytes);
+    vmu.initVmuFlash(&cpu);
+    const info = vmu.parseVms(game_bytes, vmi_bytes);
+    vmu.installVms(&cpu, info, game_bytes);
+    cpu.reset();
+    vmu.initBiosRtc(&cpu, false, false);
+
+    var game_started = false;
+    var frames: u64 = 0;
+
+    while (frames < 45) : (frames += 1) {
+        const prev_buttons = cpu.p3_buttons;
+        var buttons: u8 = 0xFF;
+
+        if (frames >= 15 and !game_started) {
+            buttons &= ~@as(u8, 0x10);
+        }
+
+        cpu.p3_buttons = buttons;
+        if (cpu.inst_bank.bank_id == .flash0) {
+            cpu.ram_bank0[0x70] = buttons ^ 0xFF;
+            cpu.ram_bank1[0x70] = buttons ^ 0xFF;
+        } else if (buttons == 0xFF and prev_buttons != 0xFF) {
+            cpu.ram_bank0[0x72] = cpu.ram_bank0[0x70];
+            cpu.ram_bank0[0x70] = 0x00;
+        }
+
+        var p3int = cpu.sfr_raw[Cpu.SFR_P3INT];
+        const p30int = p3int & Cpu.P3INT_P30INT != 0;
+        const p32int = p3int & Cpu.P3INT_P32INT != 0;
+        const any_pressed = buttons != 0xFF;
+        const any_just_pressed = (prev_buttons & buttons) != prev_buttons;
+        if (p30int) {
+            if (p32int) {
+                if (any_pressed) p3int |= Cpu.P3INT_P31INT else p3int &= ~Cpu.P3INT_P31INT;
+            } else {
+                if (any_just_pressed) p3int |= Cpu.P3INT_P31INT;
+            }
+        }
+        cpu.sfr_raw[Cpu.SFR_P3INT] = p3int;
+
+        const cycles_per_frame: u64 = cpu.cpu_freq / 60;
+        var i: u64 = 0;
+        while (i < cycles_per_frame) : (i += 1) {
+            _ = step(&cpu);
+            _ = dbg.checkBiosPhase(&cpu);
+
+            if (cpu.halted) {
+                const remaining: u32 = @intCast(cycles_per_frame - i);
+                var ticked: u32 = 0;
+                while (ticked < remaining) {
+                    const batch: u8 = @intCast(@min(remaining - ticked, 255));
+                    cpu.tickTimers(batch);
+                    ticked += batch;
+                    cpu.requestLevelDrivenInterrupts();
+                    cpu.servicePendingInterrupt();
+                    if (!cpu.halted) break;
+                }
+                i = cycles_per_frame;
+                break;
+            }
+        }
+
+        if (!game_started and cpu.bios_phase == .bios_game_launch) {
+            cpu.p3_buttons = 0xFF;
+            cpu.prev_p3_buttons = 0xFF;
+            cpu.ram_bank0[0x70] = 0x00;
+            cpu.ram_bank1[0x70] = 0x00;
+            cpu.sfr_raw[Cpu.SFR_P3INT] = 0xFD;
+            cpu.sp = 0x7F;
+            cpu.psw.rambk0 = true;
+            cpu.sfr_raw[Cpu.SFR_OCR] = 0xA3;
+            cpu.updateClock();
+            cpu.setInstructionBank(.flash0);
+            cpu.pc = 0x0000;
+            game_started = true;
+        }
+    }
+
+    try testing.expect(game_started);
+    try testing.expectEqual(cpu.inst_bank.bank_id, .flash0);
+    try testing.expect(cpu.xram_write_count > 1000);
+}
+
+test "AlienFighter launches and updates screen" {
+    const bios_bytes = @embedFile("roms/bios/vmu_bios_jp.bin");
+    const game_bytes = @embedFile("roms/AlienFighter.vms");
+
+    var rom: [65536]u8 = undefined;
+    var cpu = makeCpu(&rom);
+    cpu.dreamcast_connected = false;
+    cpu.updateClock();
+    @memcpy(&rom, bios_bytes);
+    vmu.initVmuFlash(&cpu);
+    const info = vmu.parseVms(game_bytes, null);
+    vmu.installVms(&cpu, info, game_bytes);
+    cpu.reset();
+    vmu.initBiosRtc(&cpu, false, false);
+
+    // Initialisation lancement jeu identique a label_3C4B
+    cpu.p3_buttons = 0xFF;
+    cpu.prev_p3_buttons = 0xFF;
+    cpu.ram_bank0[0x70] = 0x00;
+    cpu.ram_bank1[0x70] = 0x00;
+    cpu.sfr_raw[Cpu.SFR_P3INT] = 0xFD;
+    cpu.sp = 0x7F;
+    cpu.psw.rambk0 = true;
+    cpu.sfr_raw[Cpu.SFR_OCR] = 0xA3;
+    cpu.updateClock();
+    cpu.setInstructionBank(.flash0);
+    cpu.pc = 0x0000;
+
+    var step_count: u64 = 0;
+    while (step_count < 100000) : (step_count += 1) {
+        _ = step(&cpu);
+    }
+
+    try testing.expectEqual(cpu.inst_bank.bank_id, .flash0);
+    try testing.expect(cpu.xram_write_count > 500);
+}
+
+test "Metroid launches and updates screen" {
+    const bios_bytes = @embedFile("roms/bios/vmu_bios_jp.bin");
+    const game_bytes = @embedFile("roms/Metroid.vms");
+
+    var rom: [65536]u8 = undefined;
+    var cpu = makeCpu(&rom);
+    cpu.dreamcast_connected = false;
+    cpu.updateClock();
+    @memcpy(&rom, bios_bytes);
+    vmu.initVmuFlash(&cpu);
+    const info = vmu.parseVms(game_bytes, null);
+    vmu.installVms(&cpu, info, game_bytes);
+    cpu.reset();
+    vmu.initBiosRtc(&cpu, false, false);
+
+    cpu.p3_buttons = 0xFF;
+    cpu.prev_p3_buttons = 0xFF;
+    cpu.ram_bank0[0x70] = 0x00;
+    cpu.ram_bank1[0x70] = 0x00;
+    cpu.sfr_raw[Cpu.SFR_P3INT] = 0xFD;
+    cpu.sp = 0x7F;
+    cpu.setInstructionBank(.flash0);
+    cpu.pc = 0x0000;
+
+    var step_count: u64 = 0;
+    while (step_count < 50000) : (step_count += 1) {
+        _ = step(&cpu);
+    }
+
+    try testing.expectEqual(cpu.inst_bank.bank_id, .flash0);
+    try testing.expect(cpu.xram_write_count > 300);
+}

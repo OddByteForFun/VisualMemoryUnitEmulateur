@@ -17,7 +17,6 @@ const BG = rl.Color.init(190, 210, 180, 255);
 
 var azerty_mode: bool = false;
 var game_started: bool = false; // Track when game launches from BIOS
-var start_pulse_frames: u32 = 0;
 
 pub fn main(init: std.process.Init) !void {
     var arg_iter = try std.process.Args.Iterator.initAllocator(init.minimal.args, init.arena.allocator());
@@ -167,7 +166,6 @@ pub fn main(init: std.process.Init) !void {
             cpu.reset();
             vmu.initBiosRtc(&cpu, true, false);
             game_started = false;
-            start_pulse_frames = 0;
             std.debug.print("[BIOS] Reset vers le menu BIOS officiel\n", .{});
         }
 
@@ -215,15 +213,19 @@ pub fn main(init: std.process.Init) !void {
             // Lancement automatique direct, ou lancement manuel depuis le menu BIOS sur appui du bouton A
             const a_pressed = frames >= 10 and (rl.isKeyDown(.enter) or rl.isKeyDown(.space) or rl.isKeyDown(.k) or (if (!azerty_mode) rl.isKeyDown(.z) else rl.isKeyDown(.w)));
             if (!use_bios_menu or a_pressed) {
-                // Clear P3 latch before game starts
+                // Initialise les registres CPU pour le lancement du jeu (identique à la routine label_3C4B du BIOS)
                 cpu.p3_buttons = 0xFF;
                 cpu.prev_p3_buttons = 0xFF;
                 cpu.ram_bank0[0x70] = 0x00;
+                cpu.ram_bank1[0x70] = 0x00;
                 cpu.sfr_raw[Cpu.SFR_P3INT] = 0xFD;
+                cpu.sp = 0x7F; // Initialisation pile
+                cpu.psw.rambk0 = true; // Swap to RAM bank 1 (label_3C4B: set1 psw, rambk0)
+                cpu.sfr_raw[Cpu.SFR_OCR] = 0xA3; // Initialise horloge Quartz /6 (label_3C4B: mov #$A3, ocr)
+                cpu.updateClock();
                 cpu.setInstructionBank(.flash0);
                 cpu.pc = 0x0000;
                 game_started = true;
-                start_pulse_frames = 0;
             }
         }
 
@@ -427,22 +429,11 @@ fn updateButtons(cpu: *Cpu, frames: u64) void {
 
     const mode_key_pressed = frames >= 10 and (rl.isKeyPressed(.m) or rl.isKeyPressed(.tab));
 
-    // Start pulse en jeu (flash0) sur écran titre
-    const title_start_pressed = frames >= 10 and (rl.isKeyPressed(.enter) or rl.isKeyPressed(.space));
-    if (cpu.inst_bank.bank_id == .flash0) {
-        if (title_start_pressed) {
-            buttons &= ~@as(u8, 0x40); // P3.6 = Start pulse
-            start_pulse_frames = 1;
-        } else if (start_pulse_frames > 0) {
-            buttons &= ~@as(u8, 0x40);
-            start_pulse_frames -= 1;
-        }
-    }
-
     cpu.p3_buttons = buttons;
     if (cpu.inst_bank.bank_id == .flash0) {
         // En jeu : synchroniser le latch 0x70 active-high pour les jeux qui le lisent
         cpu.ram_bank0[0x70] = buttons ^ 0xFF;
+        cpu.ram_bank1[0x70] = buttons ^ 0xFF;
     } else if (buttons == 0xFF and prev_buttons != 0xFF) {
         // En ROM BIOS : quand les boutons sont relâchés, synchroniser le déverrouillage
         // (comme la routine d'interruption du base timer 0x1EB6)

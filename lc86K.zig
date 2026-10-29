@@ -189,7 +189,10 @@ pub const Cpu = struct {
     pub fn syncInstructionBank(self: *Cpu) void {
         self.sync_count += 1;
         const ext = self.pending_ext;
-        if (ext & 0x08 != 0) {
+        // Bit 0 de SFR_EXT (0x10D) controle l'espace d'instructions :
+        // 0 = ROM (BIOS / interne), 1 = Flash (Jeu / externe).
+        // VMU.txt/VMU.pdf et bios.s:7230 'not1 ext, $00 ; Swap to executing from Flash'
+        if (ext & 0x01 != 0) {
             self.inst_bank.data = self.flash[0..65536];
             self.inst_bank.bank_id = .flash0;
             self.last_sync_bank = .flash0;
@@ -210,8 +213,8 @@ pub const Cpu = struct {
                 self.inst_bank.bank_id = .rom;
             },
             .flash0 => {
-                self.pending_ext = 0x88; // flash0 launch pattern seen in BIOS wrapper (bit3 set)
-                self.sfr_raw[SFR_EXT] = 0x88;
+                self.pending_ext = 0x89; // Flash bank 0 mode (bit0=1 Flash, bit3=1 Flash enabled)
+                self.sfr_raw[SFR_EXT] = 0x89;
                 self.inst_bank.data = self.flash[0..65536];
                 self.inst_bank.bank_id = .flash0;
             },
@@ -404,25 +407,20 @@ pub const Cpu = struct {
         self.ram_bank0[self.sp] = @truncate(return_addr & 0xFF);
         self.sp +%= 1;
         self.ram_bank0[self.sp] = @truncate(return_addr >> 8);
-        // Sur le vrai LC86000, les vecteurs d'interruption (0x0000-0x00FF) sont toujours en ROM.
-        // Sauvegarder le bank courant et basculer en ROM pour l'ISR.
+        // Sur le LC86000 (VMU.txt section 5.1 / VMU.pdf) :
+        // - Si l'interruption survient en ROM, le vecteur en ROM est appele.
+        // - Si elle survient en Flash, le vecteur de la banque 0 en Flash est appele.
         self.saved_pending_ext = self.pending_ext;
-        self.setInstructionBank(.rom);
+        if (self.inst_bank.bank_id == .flash1) {
+            self.setInstructionBank(.flash0);
+        }
         self.pc = vecteur;
         self.interrupt_depth = 1;
         self.halted = false;
 
         if (val) |irq| switch (irq) {
-            .int2 => self.sfr_raw[SFR_T0CNT] &= ~T0CNT_T0LOVF,
-            .int3 => self.sfr_raw[SFR_BTCR] &= ~(BTCR_BT0_FLAG | BTCR_BT1_FLAG),
-            .t0h => self.sfr_raw[SFR_T0CNT] &= ~T0CNT_T0HOVF,
-            .t1 => {
-                self.sfr_raw[SFR_T1CNT] &= ~(T1CNT_T1HOVF | T1CNT_T1LOVF);
-            },
-            .p3 => {
-                self.sfr_raw[SFR_P3INT] &= ~P3INT_P31INT;
-            },
             .maple => self.maple_irq_pending = false,
+            else => {},
         };
     }
 
@@ -557,11 +555,13 @@ pub const Cpu = struct {
                 // TODO: retourner 0xF3 en standalone quand le BIOS gèrera le mode autonome
                 return 0xF2; // P71=1 (pas low battery), P70=0 (5V présente)
             },
+            SFR_VRMAD1 => @as(u8, @truncate(self.vrmad & 0xFF)),
+            SFR_VRMAD2 => (self.sfr_raw[SFR_VRMAD2] & 0xFE) | @as(u8, @truncate((self.vrmad >> 8) & 0x01)),
             SFR_VTRBF => {
                 const addr = self.vrmad & 0x1FF;
                 const data = if (addr < 512) self.work_ram[addr] else 0xFF;
                 if (self.sfr_raw[SFR_VSEL] & 0x10 != 0) {
-                    self.vrmad +%= 1;
+                    self.vrmad = (self.vrmad + 1) & 0x1FF;
                 }
                 return data;
             },

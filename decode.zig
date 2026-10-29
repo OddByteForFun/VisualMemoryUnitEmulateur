@@ -361,9 +361,11 @@ pub fn step(cpu: *Cpu) u8 {
             const lo = cpu.ram_bank0[cpu.sp];
             cpu.sp -%= 1;
             cpu.pc = (@as(u16, hi) << 8) | @as(u16, lo);
-            // Restaurer le bank d'instructions pré-interruption (sauvegardé par servicePendingInterrupt)
-            cpu.pending_ext = cpu.saved_pending_ext;
-            cpu.syncInstructionBank();
+            // Restaurer le bank d'instructions si necessaire (VMU.txt section 5.1)
+            if (cpu.pending_ext != cpu.saved_pending_ext) {
+                cpu.pending_ext = cpu.saved_pending_ext;
+                cpu.syncInstructionBank();
+            }
             if (dbg.log_level == .trace) {
                 dbg.log("RETI -> PC={X:0>4} depth_before={d}", .{ cpu.pc, cpu.interrupt_depth });
             }
@@ -430,7 +432,7 @@ fn signExt8(val: u8) u16 {
 fn readIndirectAddr(cpu: *Cpu, ri: u2) u9 {
     const irbk: u4 = @truncate((@as(u8, @bitCast(cpu.psw)) >> 3) & 0b11);
     const reg_addr: u4 = (irbk << 2) | @as(u4, ri);
-    const reg_val = cpu.ram_bank0[reg_addr];
+    const reg_val = cpu.currentRamBank()[reg_addr];
     const bit8: u9 = if (ri & 2 != 0) 0x100 else 0;
     return bit8 | reg_val;
 }
